@@ -144,6 +144,10 @@ export function prerender(): Plugin {
           // to hydrate this markup instead of repainting it.
           () => `<div id="root" data-prerendered="${route}">${body}</div>`,
         )
+        // The public landing is static HTML with a normal link to the app, so
+        // it does not need the React/Router entry. Keep the script in _spa.html
+        // so authenticated client routes still boot their lazy route modules.
+        if (route === '/') page = removeClientEntryScript(page)
         // Site policy applies even when a page forgets to spread seo into
         // <Seo>. A page-level exclusion must also stay out of the sitemap.
         if (noindex) page = withNoindexMeta(page)
@@ -201,6 +205,15 @@ function stampHead(template: string, head: string): string {
     }
   }
   return stripped.replace('</head>', () => `${head}\n  </head>`)
+}
+
+function removeClientEntryScript(html: string): string {
+  const entryScript = /<script\b(?=[^>]*\btype="module")(?=[^>]*\bsrc="\/assets\/index-[^"]+\.js")[^>]*>\s*<\/script>\s*/g
+  const matches = [...html.matchAll(entryScript)]
+  if (matches.length !== 1) {
+    throw new Error(`[prerender] expected one Vite client entry script on the static landing, found ${matches.length}.`)
+  }
+  return html.replace(entryScript, '')
 }
 
 function withNoindexMeta(template: string): string {

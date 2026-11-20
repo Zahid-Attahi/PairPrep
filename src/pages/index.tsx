@@ -16,7 +16,6 @@
  * initial states. `<Seo>` comes first and reads src/seo.ts.
  */
 
-import { Link } from 'react-router-dom'
 import { Seo } from '../components/Seo'
 import { APP_NAME } from '../constants'
 import { seo } from '../seo'
@@ -38,12 +37,12 @@ export default function Landing() {
           plain static page. The live app, with sign-in and synced data, lives
           behind the link below.
         </p>
-        <Link
-          to="/home"
+        <a
+          href="/home"
           className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
         >
           Enter the app
-        </Link>
+        </a>
       </div>
     </>
   )

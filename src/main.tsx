@@ -31,10 +31,9 @@ async function main() {
   installStaleChunkRecovery(router)
 
   // Let the router finish loading the first route's code-split module before
-  // rendering. Until then it renders only a loading fallback — and on a page
-  // prerender.ts wrote at build (the landing), React must hydrate the
-  // HTML already on screen with the real page, or it discards that markup and
-  // repaints.
+  // rendering. If a prerendered page retains this entry script, hydrate its
+  // HTML; the static landing omits the script and the SPA shell keeps it for
+  // client routes.
   if (!router.state.initialized) {
     await new Promise<void>((done) => {
       const stop = router.subscribe((state) => {
