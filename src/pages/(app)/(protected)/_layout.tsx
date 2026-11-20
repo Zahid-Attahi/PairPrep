@@ -16,7 +16,7 @@
 import { useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { AuthGate, AuthOverlay } from 'deepspace'
-import { Button } from '@/components/ui'
+import { Button } from '@/components/ui/Button'
 
 export default function ProtectedLayout() {
   return (

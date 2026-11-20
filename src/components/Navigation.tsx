@@ -17,16 +17,14 @@ import type { Role } from '../constants'
 import { nav } from '../nav'
 import { cn } from '../lib/utils'
 import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from './ui'
+} from './ui/DropdownMenu'
+import { Avatar, AvatarFallback, AvatarImage } from './ui/Avatar'
 
 export default function Navigation() {
   const { isLoaded, isSignedIn, user, userLoading } = useAuthProfileReady({ requireUser: true })

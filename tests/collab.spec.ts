@@ -137,6 +137,59 @@ test('API status page shows local retry after first-load API failure', async ({ 
   expect(user.page.url()).toBe(urlAfterFailure)
 })
 
+test('Create Room dialog loads on demand and supports keyboard interaction', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  let releaseDialogModule!: () => void
+  const dialogModuleGate = new Promise<void>((resolve) => {
+    releaseDialogModule = resolve
+  })
+  let dialogModuleRequests = 0
+
+  await alice.page.route('**/src/components/CreateRoomDialog.tsx*', async (route) => {
+    dialogModuleRequests += 1
+    await dialogModuleGate
+    await route.continue()
+  })
+
+  try {
+    await alice.page.goto('/home')
+    await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+    expect(dialogModuleRequests).toBe(0)
+
+    const createButton = alice.page.getByRole('button', { name: 'Create room', exact: true })
+    await createButton.click()
+    const loading = alice.page.getByRole('status').filter({ hasText: 'Opening the room form…' })
+    await expect(loading).toBeVisible()
+    await expect.poll(() => dialogModuleRequests).toBe(1)
+    releaseDialogModule()
+
+    const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+    await expect(dialog).toBeVisible()
+    const roomName = dialog.getByRole('textbox', { name: 'Room name' })
+    await expect(roomName).toBeVisible()
+    await expect(roomName).toBeFocused()
+
+    await alice.page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(createButton).toBeFocused()
+
+    await createButton.click()
+    await expect(dialog).toBeVisible()
+    const challenge = dialog.getByRole('combobox', { name: 'Coding challenge' })
+    await challenge.press('ArrowDown')
+    await expect(alice.page.getByRole('option', { name: /Two Sum/ })).toBeVisible()
+    await alice.page.keyboard.press('Enter')
+    await expect(challenge).toContainText(/Two Sum/)
+    await expect(roomName).toBeVisible()
+
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dialog).toBeHidden()
+    expect(dialogModuleRequests).toBe(1)
+  } finally {
+    releaseDialogModule()
+  }
+})
+
 test('Alice can create an interview room and access its shared notes', async ({ users }) => {
   const [alice] = await users(['Alice'])
   const roomName = `Alice E2E room ${Date.now()}`

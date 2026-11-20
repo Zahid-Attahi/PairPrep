@@ -17,7 +17,8 @@
 import { Suspense } from 'react'
 import { Outlet, useRouteError } from 'react-router-dom'
 import { ErrorScreen } from '../components/ErrorScreen'
-import { ToastProvider, TooltipProvider } from '@/components/ui'
+import { ToastProvider } from '@/components/ui/Toast'
+import { TooltipProvider } from '@/components/ui/Tooltip'
 
 export default function App() {
   return (

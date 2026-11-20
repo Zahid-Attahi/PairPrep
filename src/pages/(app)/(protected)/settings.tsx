@@ -4,7 +4,7 @@
  */
 
 import { signOut, useUser } from 'deepspace'
-import { Button } from '@/components/ui'
+import { Button } from '@/components/ui/Button'
 
 export default function SettingsPage() {
   const { user } = useUser()

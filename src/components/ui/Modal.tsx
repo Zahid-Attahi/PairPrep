@@ -1,6 +1,7 @@
 /** Modal / ConfirmModal — app-level wrappers around Dialog primitives. */
 
 import React, { ReactNode, JSX } from 'react'
+import type { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,7 @@ interface ModalProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'childre
   onClose: () => void
   children: ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl'
+  finalFocus?: DialogPrimitive.Popup.Props['finalFocus']
 }
 
 // Always give a Modal an accessible name: render a <Modal.Title> (Base UI

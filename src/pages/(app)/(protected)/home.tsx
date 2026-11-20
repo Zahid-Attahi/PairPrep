@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, useQuery } from 'deepspace'
 import {
@@ -12,9 +12,12 @@ import {
   Sparkles,
   UsersRound,
 } from 'lucide-react'
-import { Badge, Button, EmptyState, Input, Modal, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui'
-import { codingChallenges, getChallenge } from '@/challenges'
-import { callServerAction } from '@/lib/server-actions'
+import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { getChallenge } from '@/challenges'
+
+const CreateRoomDialog = lazy(() => import('@/components/CreateRoomDialog'))
 
 interface InterviewRoom {
   name: string
@@ -36,35 +39,13 @@ export default function HomePage() {
     orderDir: 'desc',
   })
   const navigate = useNavigate()
+  const createRoomButtonRef = useRef<HTMLButtonElement>(null)
   const [createOpen, setCreateOpen] = useState(false)
-  const [roomName, setRoomName] = useState('')
-  const [challengeId, setChallengeId] = useState('')
-  const [createError, setCreateError] = useState('')
-  const [creating, setCreating] = useState(false)
+  const [createDialogLoaded, setCreateDialogLoaded] = useState(false)
 
-  async function createRoom(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const name = roomName.trim()
-    if (!name) return setCreateError('Enter a room name.')
-    if (!challengeId) return setCreateError('Choose a coding challenge.')
-
-    setCreating(true)
-    setCreateError('')
-    try {
-      const result = await callServerAction<{ recordId: string }>('rooms.create', { name, challengeId })
-      setCreateOpen(false)
-      navigate(`/rooms/${encodeURIComponent(result.recordId)}`)
-    } catch (cause) {
-      setCreateError(cause instanceof Error ? cause.message : 'Could not create the room.')
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  function closeCreate() {
-    if (creating) return
-    setCreateOpen(false)
-    setCreateError('')
+  function openCreate() {
+    setCreateDialogLoaded(true)
+    setCreateOpen(true)
   }
 
   return (
@@ -85,7 +66,7 @@ export default function HomePage() {
             </p>
           </div>
 
-          <Button size="lg" onClick={() => setCreateOpen(true)}>
+          <Button ref={createRoomButtonRef} size="lg" onClick={openCreate}>
             <Plus aria-hidden="true" /> Create room
           </Button>
         </header>
@@ -124,7 +105,7 @@ export default function HomePage() {
                   icon={<UsersRound className="text-primary" aria-hidden="true" />}
                   title="Your rooms will show up here"
                   description="Create a room to choose a challenge and invite someone to practice with you. Your sessions will be easy to find whenever you come back."
-                  action={{ label: 'Create your first room', onClick: () => setCreateOpen(true) }}
+                  action={{ label: 'Create your first room', onClick: openCreate }}
                 />
               )}
               {status === 'ready' && rooms.length > 0 && (
@@ -209,36 +190,29 @@ export default function HomePage() {
         </main>
       </div>
 
-      <Modal open={createOpen} onClose={closeCreate}>
-        <Modal.Header>
-          <Modal.Title>Create an interview room</Modal.Title>
-          <Modal.Description>Choose a challenge to start a focused practice session.</Modal.Description>
-        </Modal.Header>
-        <form onSubmit={createRoom}>
-          <Modal.Body className="space-y-5">
-            <div className="space-y-2">
-              <label htmlFor="room-name" className="text-sm font-medium">Room name</label>
-              <Input id="room-name" autoFocus maxLength={80} value={roomName} onChange={(event) => setRoomName(event.target.value)} placeholder="e.g. Tuesday practice" required />
+      {createDialogLoaded && (
+        <Suspense
+          fallback={(
+            <div
+              role="status"
+              aria-live="polite"
+              className="fixed bottom-4 right-4 z-50 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground shadow-md"
+            >
+              Opening the room form…
             </div>
-            <div className="space-y-2">
-              <label id="challenge-label" className="text-sm font-medium">Coding challenge</label>
-              <Select value={challengeId} onValueChange={setChallengeId}>
-                <SelectTrigger aria-labelledby="challenge-label"><SelectValue placeholder="Choose a challenge" /></SelectTrigger>
-                <SelectContent>
-                  {codingChallenges.map((challenge) => (
-                    <SelectItem key={challenge.id} value={challenge.id}>{challenge.title} · {challenge.difficulty}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {createError && <p role="alert" className="text-sm text-destructive">{createError}</p>}
-          </Modal.Body>
-          <Modal.Footer>
-            <Button variant="ghost" onClick={closeCreate} disabled={creating}>Cancel</Button>
-            <Button type="submit" loading={creating}>Create room</Button>
-          </Modal.Footer>
-        </form>
-      </Modal>
+          )}
+        >
+          <CreateRoomDialog
+            open={createOpen}
+            finalFocus={createRoomButtonRef}
+            onClose={() => setCreateOpen(false)}
+            onCreated={(recordId) => {
+              setCreateOpen(false)
+              navigate(`/rooms/${encodeURIComponent(recordId)}`)
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
