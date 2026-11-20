@@ -197,3 +197,121 @@ test('Alice and Bob can collaborate in an invited interview room', async ({ user
   await alice.page.getByRole('textbox', { name: 'Shared interview notes' }).fill(note)
   await expect(bobNotes).toHaveValue(note, { timeout: 15_000 })
 })
+
+test('AI Coach displays a successful mocked response', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `AI Coach success E2E room ${Date.now()}`
+  const userMessage = 'Can you give me a small hint for Two Sum?'
+  const coachReply = 'Consider how a map could help you remember values as you scan the numbers.'
+
+  await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { reply: coachReply } }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
+  await coachInput.fill(userMessage)
+  await alice.page.getByRole('button', { name: 'Send message' }).click()
+
+  await expect(alice.page.getByText(userMessage, { exact: true })).toBeVisible()
+  await expect(alice.page.getByText(coachReply, { exact: true })).toBeVisible()
+})
+
+test('AI Coach loading state disables input until the mocked response arrives', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `AI Coach loading E2E room ${Date.now()}`
+  let releaseCoachResponse!: () => void
+  const coachResponseGate = new Promise<void>((resolve) => {
+    releaseCoachResponse = resolve
+  })
+
+  await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    await coachResponseGate
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: { reply: 'Think about storing each number you have already seen.' },
+      }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
+  const sendButton = alice.page.getByRole('button', { name: 'Send message' })
+  await coachInput.fill('Please give me one hint.')
+  await sendButton.click()
+
+  const loading = alice.page.getByText('Coach is thinking…', { exact: true })
+  await expect(loading).toBeVisible()
+  await expect(coachInput).toBeDisabled()
+  await expect(sendButton).toBeDisabled()
+
+  releaseCoachResponse()
+  await expect(loading).toBeHidden()
+  await expect(alice.page.getByText('Think about storing each number you have already seen.', { exact: true })).toBeVisible()
+  await expect(coachInput).toBeEnabled()
+})
+
+test('AI Coach displays request errors and remains usable', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `AI Coach error E2E room ${Date.now()}`
+
+  await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    await route.fulfill({
+      status: 502,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: false, error: 'The AI coach is temporarily unavailable.' }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
+  await coachInput.fill('How should I begin?')
+  await alice.page.getByRole('button', { name: 'Send message' }).click()
+
+  await expect(alice.page.getByRole('alert').filter({
+    hasText: 'The AI coach is temporarily unavailable.',
+  })).toBeVisible()
+  await expect(coachInput).toBeEnabled()
+  await coachInput.fill('I can still ask another question.')
+  await expect(alice.page.getByRole('button', { name: 'Send message' })).toBeEnabled()
+})
