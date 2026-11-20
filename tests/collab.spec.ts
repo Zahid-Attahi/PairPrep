@@ -431,6 +431,57 @@ test('AI Coach displays request errors and remains usable', async ({ users }) =>
   await expect(alice.page.getByRole('button', { name: 'Send message' })).toBeEnabled()
 })
 
+test('AI Coach handles a mocked action failure and can retry', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `AI Coach transport error E2E room ${Date.now()}`
+  let requestCount = 0
+
+  // This is the action response the UI receives when the server catches an
+  // unexpected provider transport exception; the route prevents any real call.
+  await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    requestCount += 1
+    if (requestCount === 1) {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: false, error: 'The AI coach is temporarily unavailable. Please try again.' }),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { reply: 'Let’s work through the problem step by step.' } }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
+  await coachInput.fill('Could you offer a hint?')
+  await alice.page.getByRole('button', { name: 'Send message' }).click()
+
+  await expect(alice.page.getByRole('alert').filter({
+    hasText: 'The AI coach is temporarily unavailable. Please try again.',
+  })).toBeVisible()
+  await expect(coachInput).toBeEnabled()
+
+  await coachInput.fill('I would like to try again.')
+  await alice.page.getByRole('button', { name: 'Send message' }).click()
+  await expect(alice.page.getByText('Let’s work through the problem step by step.')).toBeVisible()
+  expect(requestCount).toBe(2)
+})
+
 test('Technical Research displays mocked search results', async ({ users }) => {
   const [alice] = await users(['Alice'])
   const roomName = `Technical research success E2E room ${Date.now()}`

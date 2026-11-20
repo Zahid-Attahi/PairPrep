@@ -270,10 +270,15 @@ export const actions: Record<string, ActionHandler<Env>> = {
       `Challenge: ${challenge.title}. Topic: ${challenge.topic}. Difficulty: ${challenge.difficulty}.`,
     ].join('\n')
 
-    const result = await tools.integration<ChatCompletionData>('openai/chat-completion', {
-      model: 'gpt-5.6-terra',
-      messages: [{ role: 'system', content: systemMessage }, ...messages],
-    })
+    let result
+    try {
+      result = await tools.integration<ChatCompletionData>('openai/chat-completion', {
+        model: 'gpt-5.6-terra',
+        messages: [{ role: 'system', content: systemMessage }, ...messages],
+      })
+    } catch {
+      return failure('The AI coach is temporarily unavailable. Please try again.')
+    }
     if (!result.success) return failure('The AI coach is temporarily unavailable. Please try again.')
 
     const reply = result.data.choices?.[0]?.message?.content
