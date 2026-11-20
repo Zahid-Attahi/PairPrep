@@ -315,3 +315,120 @@ test('AI Coach displays request errors and remains usable', async ({ users }) =>
   await coachInput.fill('I can still ask another question.')
   await expect(alice.page.getByRole('button', { name: 'Send message' })).toBeEnabled()
 })
+
+test('Technical Research displays mocked search results', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `Technical research success E2E room ${Date.now()}`
+  const results = [
+    { title: 'A Practical Guide to Hash Tables', url: 'https://example.com/hash-tables' },
+    { title: 'Algorithm Design: Two Sum with a Hash Map', url: 'https://algorithms.example.org/two-sum' },
+  ]
+
+  await alice.page.route('**/api/actions/rooms.research', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { results } }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const searchInput = alice.page.getByRole('textbox', { name: 'Search technical topics' })
+  await searchInput.fill('hash maps in algorithm interviews')
+  await alice.page.getByRole('button', { name: 'Search', exact: true }).click()
+
+  for (const result of results) {
+    await expect(alice.page.getByRole('link', { name: result.title })).toHaveAttribute('href', result.url)
+    await expect(alice.page.getByText(result.url, { exact: true })).toBeVisible()
+  }
+})
+
+test('Technical Research loading state disables search input until results arrive', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `Technical research loading E2E room ${Date.now()}`
+  let releaseResearchResponse!: () => void
+  const researchResponseGate = new Promise<void>((resolve) => {
+    releaseResearchResponse = resolve
+  })
+  const results = [{ title: 'Hash Map Fundamentals', url: 'https://example.com/hash-map-fundamentals' }]
+
+  await alice.page.route('**/api/actions/rooms.research', async (route) => {
+    await researchResponseGate
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { results } }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const searchInput = alice.page.getByRole('textbox', { name: 'Search technical topics' })
+  await searchInput.fill('hash map fundamentals')
+  await alice.page.getByRole('button', { name: 'Search', exact: true }).click()
+
+  const loading = alice.page.getByText('Searching technical sources…', { exact: true })
+  await expect(loading).toBeVisible()
+  await expect(searchInput).toBeDisabled()
+
+  releaseResearchResponse()
+  await expect(loading).toBeHidden()
+  await expect(alice.page.getByRole('link', { name: results[0].title })).toHaveAttribute('href', results[0].url)
+  await expect(searchInput).toBeEnabled()
+})
+
+test('Technical Research shows errors and keeps search usable', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `Technical research error E2E room ${Date.now()}`
+  const errorMessage = 'Technical research is temporarily unavailable. Please try again.'
+
+  await alice.page.route('**/api/actions/rooms.research', async (route) => {
+    await route.fulfill({
+      status: 502,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: false, error: errorMessage }),
+    })
+  })
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  const searchInput = alice.page.getByRole('textbox', { name: 'Search technical topics' })
+  await searchInput.fill('binary search complexity')
+  await alice.page.getByRole('button', { name: 'Search', exact: true }).click()
+
+  await expect(alice.page.getByRole('alert').filter({ hasText: errorMessage })).toBeVisible()
+  await expect(searchInput).toBeEnabled()
+  await searchInput.fill('I can search again')
+  await expect(alice.page.getByRole('button', { name: 'Search', exact: true })).toBeEnabled()
+})
