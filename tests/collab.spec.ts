@@ -159,6 +159,121 @@ test('Alice can create an interview room and access its shared notes', async ({ 
   ).toBeEnabled({ timeout: 15_000 })
 })
 
+test('room owner cannot change immutable ownerId or teamId fields', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `__test-${Date.now()}__ Protected fields E2E`
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  const roomUrl = alice.page.url()
+  const roomId = new URL(roomUrl).pathname.match(/\/rooms\/([^/]+)$/)?.[1]
+  expect(roomId).toBeTruthy()
+
+  await alice.page.goto(`/room-mutation-test?roomId=${encodeURIComponent(roomId!)}`)
+  await expect(alice.page.getByRole('heading', { name: 'Development room mutation probe' })).toBeVisible()
+  await expect(alice.page.getByTestId('mutation-probe-ready')).toHaveText('Ready', { timeout: 15_000 })
+
+  await alice.page.getByRole('button', { name: 'Attempt ownerId update' }).click()
+  await expect(alice.page.getByTestId('ownerId-update-result')).toHaveText(
+    "Cannot modify immutable field 'ownerId'",
+    { timeout: 15_000 },
+  )
+
+  await alice.page.getByRole('button', { name: 'Attempt teamId update' }).click()
+  await expect(alice.page.getByTestId('teamId-update-result')).toHaveText(
+    "Cannot modify immutable field 'teamId'",
+    { timeout: 15_000 },
+  )
+
+  await alice.page.goto(roomUrl)
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible({ timeout: 15_000 })
+  await expect(alice.page.getByText('You own this room')).toBeVisible()
+})
+
+test('an uninvited user cannot access a private interview room', async ({ users }) => {
+  const [alice, bob] = await users(['Alice', 'Bob'])
+  const roomName = `Private room access E2E ${Date.now()}`
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  const roomUrl = alice.page.url()
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+
+  await bob.page.goto(roomUrl)
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  await expect(bob.page.getByText('This room may not exist, or you may not have access to it.')).toBeVisible()
+  await expect(bob.page.getByRole('heading', { name: roomName })).toHaveCount(0)
+  await expect(bob.page.getByRole('heading', { name: 'Shared interview notes' })).toHaveCount(0)
+  await expect(bob.page.getByRole('heading', { name: 'Participants' })).toHaveCount(0)
+  await expect(bob.page.getByRole('heading', { name: 'AI interview coach' })).toHaveCount(0)
+  await expect(bob.page.getByRole('heading', { name: 'Technical research' })).toHaveCount(0)
+})
+
+test('a non-owner cannot invite a participant to another user’s room', async ({ users }) => {
+  const [alice, bob] = await users(['Alice', 'Bob'])
+  const roomName = `Owner-only invitation E2E ${Date.now()}`
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  const roomUrl = alice.page.url()
+  const roomId = new URL(roomUrl).pathname.match(/\/rooms\/([^/]+)$/)?.[1]
+  expect(roomId).toBeTruthy()
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+
+  await bob.page.goto('/home')
+  await expect(bob.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await bob.page.goto(roomUrl)
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+
+  const invitationResult = await bob.page.evaluate(async ({ roomId, email }) => {
+    const { callServerAction } = await import('/src/lib/server-actions.ts')
+    try {
+      await callServerAction('rooms.invite', { roomId, email })
+      return { error: null }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
+  }, { roomId: roomId!, email: alice.email })
+
+  expect(invitationResult.error).toBe('Only the room owner can invite participants.')
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await expect(alice.page.getByRole('textbox', { name: 'Shared interview notes' })).toBeEnabled({
+    timeout: 15_000,
+  })
+  await expect(bob.page.getByText(/Collaborator added|invitation email sent|room access granted/i)).toHaveCount(0)
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
+})
+
 test('Alice and Bob can collaborate in an invited interview room', async ({ users }) => {
   const [alice, bob] = await users(['Alice', 'Bob'])
   const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`

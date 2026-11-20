@@ -8,6 +8,25 @@ import './styles.css'
 
 async function main() {
   const root = document.getElementById('root')!
+
+  if (import.meta.env.DEV) {
+    const { default: RoomMutationTestPage } = await import(
+      './pages/(app)/(protected)/_dev/room-mutation-test'
+    )
+    const appLayout = routes[0]?.children?.find((route) => route.id === '(app)/_layout')
+    const protectedLayout = appLayout?.children?.find(
+      (route) => route.id === '(app)/(protected)/_layout',
+    )
+    if (!protectedLayout) throw new Error('Could not find the protected route layout for the development probe.')
+
+    protectedLayout.children ??= []
+    protectedLayout.children.push({
+      id: 'development-room-mutation-test',
+      path: 'room-mutation-test',
+      Component: RoomMutationTestPage,
+    })
+  }
+
   const router = createBrowserRouter(routes)
   installStaleChunkRecovery(router)
 
