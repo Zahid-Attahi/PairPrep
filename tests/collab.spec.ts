@@ -136,3 +136,64 @@ test('API status page shows local retry after first-load API failure', async ({ 
   await expect.poll(() => requestCount).toBeGreaterThan(requestsAfterFailure)
   expect(user.page.url()).toBe(urlAfterFailure)
 })
+
+test('Alice can create an interview room and access its shared notes', async ({ users }) => {
+  const [alice] = await users(['Alice'])
+  const roomName = `Alice E2E room ${Date.now()}`
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await expect(
+    alice.page.getByRole('textbox', { name: 'Shared interview notes' }),
+  ).toBeEnabled({ timeout: 15_000 })
+})
+
+test('Alice and Bob can collaborate in an invited interview room', async ({ users }) => {
+  const [alice, bob] = await users(['Alice', 'Bob'])
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const roomName = `Alice and Bob E2E room ${uniqueId}`
+  const note = `Shared interview note ${uniqueId}`
+
+  await alice.page.goto('/home')
+  await expect(alice.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
+  const roomUrl = alice.page.url()
+  await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await expect(alice.page.getByRole('textbox', { name: 'Shared interview notes' })).toBeEnabled({
+    timeout: 15_000,
+  })
+
+  await alice.page.getByLabel('Collaborator email').fill('pairprep-bob-20261119@deepspace.test')
+  await alice.page.getByRole('button', { name: 'Add collaborator', exact: true }).click()
+  await expect(
+    alice.page.getByRole('status').filter({ hasText: 'Collaborator added' }),
+  ).toBeVisible({ timeout: 15_000 })
+
+  await bob.page.goto(roomUrl)
+  await expect(bob.page.getByRole('heading', { name: roomName })).toBeVisible({ timeout: 15_000 })
+  const bobNotes = bob.page.getByRole('textbox', { name: 'Shared interview notes' })
+  await expect(bobNotes).toBeEnabled({ timeout: 15_000 })
+
+  await alice.page.getByRole('textbox', { name: 'Shared interview notes' }).fill(note)
+  await expect(bobNotes).toHaveValue(note, { timeout: 15_000 })
+})
