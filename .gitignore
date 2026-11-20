@@ -1,0 +1,37 @@
+node_modules
+dist
+.wrangler
+.wrangler.deepspace.*.toml
+.dev.vars
+.dev.vars.*
+.deepspace
+.worker-bundle.js
+*.tgz
+test-results/
+playwright-report/
+src/router.ts
+src/modals.tsx
+.claude/launch.json
+.claude/worktrees
+
+# Local environment and secret files
+.env
+.env.*
+.envrc
+*.local.env
+.direnv/
+
+# Private keys and key containers
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.ppk
+*.der
+*.jks
+*.keystore
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
