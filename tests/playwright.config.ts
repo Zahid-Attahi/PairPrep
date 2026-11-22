@@ -33,6 +33,7 @@ export default defineConfig({
     // the app can start (`uv_interface_addresses`).
     command: `npx vite --port ${PORT} --strictPort --host 127.0.0.1`,
     cwd: '..',
+    env: { PAIRPREP_MOCK_INTEGRATIONS: '1' },
     // Readiness gates on the auth plane, not just vite: /api/auth/ok only
     // answers once workerd behind /api/* has booted, so no test starts
     // against a half-up server. Playwright keeps polling through non-OK

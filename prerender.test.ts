@@ -21,7 +21,7 @@ async function buildPages(noindex: boolean) {
   dirs.push(root)
   const client = join(root, 'dist/client')
   mkdirSync(client, { recursive: true })
-  writeFileSync(join(client, 'index.html'), '<html><head><title>Fallback</title></head><body><div id="root"></div></body></html>')
+  writeFileSync(join(client, 'index.html'), '<html><head><title>Fallback</title></head><body><div id="root"></div><script type="module" src="/assets/index-test.js"></script></body></html>')
   // Simulate a prior sitemap, or one copied from public/.
   writeFileSync(join(client, 'sitemap.xml'), '<urlset><loc>https://old.test/</loc></urlset>')
   vi.mocked(build).mockImplementation(async () => {

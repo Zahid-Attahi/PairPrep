@@ -16,6 +16,7 @@
  * cleanup. No need to manage browser contexts manually.
  */
 import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
+import type { Page, WebSocketRoute } from '@playwright/test'
 
 // A machine that has never created test accounts is the normal state of a
 // fresh checkout, and there `users()` throws — turning "you have no pool yet"
@@ -30,6 +31,105 @@ test.skip(
     '`npx deepspace test accounts create --email <name>@deepspace.test --name "<name>" ' +
     '--password-stdin`, or fetch existing pool accounts with `npx deepspace test accounts recover --all`.',
 )
+
+
+function mockAiCoachMessages(page: Page) {
+  let resolveReady!: () => void
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve
+  })
+
+  let subscription:
+    | {
+        socket: WebSocketRoute
+        subscriptionId: string
+        userId: string
+        roomId: string
+      }
+    | undefined
+
+  const records: Array<{
+    recordId: string
+    data: {
+      userId: string
+      roomId: string
+      role: 'user' | 'assistant'
+      content: string
+      createdAt: string
+    }
+    createdBy: string
+    createdAt: string
+    updatedAt: string
+  }> = []
+
+  function publish() {
+    if (!subscription) return
+
+    subscription.socket.send(JSON.stringify({
+      type: 'core.query_result',
+      payload: {
+        subscriptionId: subscription.subscriptionId,
+        records: records.toReversed(),
+      },
+    }))
+  }
+
+  function addMessage(role: 'user' | 'assistant', content: string) {
+    if (!subscription) {
+      throw new Error('AI Coach message subscription is not ready.')
+    }
+
+    const timestamp = new Date().toISOString()
+
+    records.push({
+      recordId: `mock-${records.length + 1}`,
+      data: {
+        userId: subscription.userId,
+        roomId: subscription.roomId,
+        role,
+        content,
+        createdAt: timestamp,
+      },
+      createdBy: subscription.userId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+
+    publish()
+  }
+
+  const setup = page.routeWebSocket('**/ws/**', (socket) => {
+    const server = socket.connectToServer()
+
+    socket.onMessage((message) => {
+      try {
+        const parsed = JSON.parse(String(message))
+        const query = parsed.payload?.query
+
+        if (
+          parsed.type === 'core.subscribe' &&
+          query?.collection === 'aiCoachMessages'
+        ) {
+          subscription = {
+            socket,
+            subscriptionId: parsed.payload.subscriptionId,
+            userId: query.where?.userId,
+            roomId: query.where?.roomId,
+          }
+          resolveReady()
+          publish()
+          return
+        }
+      } catch {
+        // Forward messages that are not JSON.
+      }
+
+      server.send(message)
+    })
+  })
+
+  return { setup, ready, addMessage }
+}
 
 test('each browser renders its own signed-in account', async ({ users }) => {
   const [a, b] = await users(2)
@@ -327,7 +427,56 @@ test('a non-owner cannot invite a participant to another user’s room', async (
   await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
 })
 
-test('Alice and Bob can collaborate in an invited interview room', async ({ users }) => {
+test('completed interview history and self-reviews survive reload and stay private', async ({ users }) => {
+  const [owner, outsider] = await users(2)
+  const roomName = `Interview history ${Date.now()}`
+  const summary = 'I explained the time complexity and validated my approach.'
+  const history = (page: Page) => page.getByRole('region', { name: 'Interview history' })
+
+  await owner.page.setViewportSize({ width: 320, height: 760 })
+  await owner.page.goto('/home')
+  await owner.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = owner.page.getByRole('dialog', { name: 'Create an interview room' })
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await owner.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+  await expect(owner.page).toHaveURL(/\/rooms\/[^/]+$/)
+  const roomUrl = owner.page.url()
+
+  await owner.page.getByRole('link', { name: 'Back to workspace' }).click()
+  await expect(owner.page.getByRole('link', { name: new RegExp(roomName) })).toBeVisible()
+  await expect(history(owner.page).getByRole('link', { name: roomName })).toHaveCount(0)
+  await owner.page.getByRole('link', { name: new RegExp(roomName) }).click()
+  await owner.page.getByRole('button', { name: 'Mark session complete' }).click()
+  await owner.page.getByLabel('Overall summary').fill(summary)
+  await owner.page.getByLabel('Strengths').fill('Worked through examples.')
+  await owner.page.getByLabel('Areas for improvement').fill('Explain edge cases earlier.')
+  await owner.page.getByRole('button', { name: 'Save review' }).click()
+  await expect(owner.page.getByText('Review saved.', { exact: true })).toBeVisible()
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBe(320)
+
+  await owner.page.reload()
+  await expect(owner.page.getByText(summary, { exact: true })).toBeVisible()
+  await owner.page.getByRole('link', { name: 'Back to workspace' }).click()
+  const entry = history(owner.page).getByRole('listitem').filter({ hasText: roomName })
+  await expect(entry.locator('time')).toHaveAttribute('datetime', /T/)
+  await entry.getByRole('link', { name: 'View reviews' }).click()
+  await expect(owner.page).toHaveURL(/#reviews$/)
+  await expect(owner.page.getByText(summary, { exact: true })).toBeVisible()
+
+  await outsider.page.goto('/home')
+  await expect(history(outsider.page).getByRole('heading', { name: 'Interview history' })).toBeVisible()
+  await expect(history(outsider.page).getByRole('link', { name: roomName })).toHaveCount(0)
+  await outsider.page.goto(`${roomUrl}#reviews`)
+  await expect(outsider.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
+  await expect(outsider.page.getByText(summary, { exact: true })).toHaveCount(0)
+})
+
+test('invited participants can collaborate until the owner revokes their access', async ({ users, request }) => {
+  // Stop before any provider-backed action if the test service binding is missing.
+  const catalog = await request.get('/api/integrations')
+  expect(await catalog.json()).toEqual({ mode: 'pairprep-local-mock' })
   const [alice, bob] = await users(['Alice', 'Bob'])
   const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const roomName = `Alice and Bob E2E room ${uniqueId}`
@@ -351,10 +500,13 @@ test('Alice and Bob can collaborate in an invited interview room', async ({ user
     timeout: 15_000,
   })
 
-  await alice.page.getByLabel('Collaborator email').fill('pairprep-bob-20261119@deepspace.test')
+  await bob.page.goto('/home')
+  await bob.page.getByRole('button', { name: 'Account menu' }).click()
+  await expect(bob.page.getByTestId('nav-user-email')).toHaveText(bob.email)
+  await alice.page.getByLabel('Collaborator email').fill(bob.email)
   await alice.page.getByRole('button', { name: 'Add collaborator', exact: true }).click()
   await expect(
-    alice.page.getByRole('status').filter({ hasText: 'Collaborator added' }),
+    alice.page.getByRole('status').filter({ hasText: 'Collaborator added and invitation email sent.' }),
   ).toBeVisible({ timeout: 15_000 })
 
   await bob.page.goto(roomUrl)
@@ -364,6 +516,33 @@ test('Alice and Bob can collaborate in an invited interview room', async ({ user
 
   await alice.page.getByRole('textbox', { name: 'Shared interview notes' }).fill(note)
   await expect(bobNotes).toHaveValue(note, { timeout: 15_000 })
+  await expect(bob.page.getByRole('button', { name: /Remove/ })).toHaveCount(0)
+
+  await alice.page.getByRole('textbox', { name: 'Message the interview coach' }).fill('How can I look up the complement?')
+  await alice.page.getByRole('button', { name: 'Send message' }).click()
+  await expect(alice.page.getByText(/Mock coach:/)).toBeVisible()
+  await alice.page.getByRole('button', { name: 'Clear conversation' }).click()
+  await expect(alice.page.getByText('Conversation cleared.', { exact: true })).toBeVisible()
+  await expect(alice.page.getByText(/Mock coach:/)).toHaveCount(0)
+  await alice.page.getByRole('textbox', { name: 'Search technical topics' }).fill('JavaScript Map')
+  await alice.page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(alice.page.getByRole('link', { name: 'Mock research result: JavaScript Map' })).toBeVisible()
+
+  await alice.page.getByRole('button', { name: 'Mark session complete' }).click()
+  await alice.page.getByLabel('Overall summary').fill('Private owner reflection.')
+  await alice.page.getByLabel('Strengths').fill('Explained the trade-offs.')
+  await alice.page.getByLabel('Areas for improvement').fill('Check edge cases earlier.')
+  await alice.page.getByRole('button', { name: 'Save review' }).click()
+  await expect(alice.page.getByText('Private owner reflection.', { exact: true })).toBeVisible()
+  await expect(bob.page.getByText('You haven’t written a review for this session yet.')).toBeVisible()
+  await expect(bob.page.getByText('Private owner reflection.', { exact: true })).toHaveCount(0)
+
+  await alice.page.getByRole('button', { name: /^Remove / }).click()
+  await expect(alice.page.getByText('Participant removed.', { exact: true })).toBeVisible()
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  await expect(bobNotes).toHaveCount(0)
+  await bob.page.reload()
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
 })
 
 test('AI Coach displays a successful mocked response', async ({ users }) => {
@@ -372,7 +551,13 @@ test('AI Coach displays a successful mocked response', async ({ users }) => {
   const userMessage = 'Can you give me a small hint for Two Sum?'
   const coachReply = 'Consider how a map could help you remember values as you scan the numbers.'
 
+  const coachMock = mockAiCoachMessages(alice.page)
+  await coachMock.setup
+
   await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    const request = route.request().postDataJSON() as { message?: string }
+    coachMock.addMessage('user', request.message ?? '')
+    coachMock.addMessage('assistant', coachReply)
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -392,10 +577,15 @@ test('AI Coach displays a successful mocked response', async ({ users }) => {
 
   await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
   await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await coachMock.ready
   const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
   await coachInput.fill(userMessage)
   await alice.page.getByRole('button', { name: 'Send message' }).click()
 
+  await expect(alice.page.getByText(userMessage, { exact: true })).toBeVisible()
+  await expect(alice.page.getByText(coachReply, { exact: true })).toBeVisible()
+
+  await alice.page.reload()
   await expect(alice.page.getByText(userMessage, { exact: true })).toBeVisible()
   await expect(alice.page.getByText(coachReply, { exact: true })).toBeVisible()
 })
@@ -408,8 +598,14 @@ test('AI Coach loading state disables input until the mocked response arrives', 
     releaseCoachResponse = resolve
   })
 
+  const coachMock = mockAiCoachMessages(alice.page)
+  await coachMock.setup
+
   await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    const request = route.request().postDataJSON() as { message?: string }
+    coachMock.addMessage('user', request.message ?? '')
     await coachResponseGate
+    coachMock.addMessage('assistant', 'Think about storing each number you have already seen.')
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -432,6 +628,7 @@ test('AI Coach loading state disables input until the mocked response arrives', 
 
   await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
   await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await coachMock.ready
   const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
   const sendButton = alice.page.getByRole('button', { name: 'Send message' })
   await coachInput.fill('Please give me one hint.')
@@ -452,7 +649,12 @@ test('AI Coach displays request errors and remains usable', async ({ users }) =>
   const [alice] = await users(['Alice'])
   const roomName = `AI Coach error E2E room ${Date.now()}`
 
+  const coachMock = mockAiCoachMessages(alice.page)
+  await coachMock.setup
+
   await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    const request = route.request().postDataJSON() as { message?: string }
+    coachMock.addMessage('user', request.message ?? '')
     await route.fulfill({
       status: 502,
       contentType: 'application/json',
@@ -472,6 +674,7 @@ test('AI Coach displays request errors and remains usable', async ({ users }) =>
 
   await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
   await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await coachMock.ready
   const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
   await coachInput.fill('How should I begin?')
   await alice.page.getByRole('button', { name: 'Send message' }).click()
@@ -491,7 +694,12 @@ test('AI Coach handles a mocked action failure and can retry', async ({ users })
 
   // This is the action response the UI receives when the server catches an
   // unexpected provider transport exception; the route prevents any real call.
+  const coachMock = mockAiCoachMessages(alice.page)
+  await coachMock.setup
+
   await alice.page.route('**/api/actions/rooms.coach', async (route) => {
+    const request = route.request().postDataJSON() as { message?: string }
+    coachMock.addMessage('user', request.message ?? '')
     requestCount += 1
     if (requestCount === 1) {
       await route.fulfill({
@@ -501,6 +709,7 @@ test('AI Coach handles a mocked action failure and can retry', async ({ users })
       })
       return
     }
+    coachMock.addMessage('assistant', 'Let’s work through the problem step by step.')
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -520,6 +729,7 @@ test('AI Coach handles a mocked action failure and can retry', async ({ users })
 
   await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/, { timeout: 15_000 })
   await expect(alice.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await coachMock.ready
   const coachInput = alice.page.getByRole('textbox', { name: 'Message the interview coach' })
   await coachInput.fill('Could you offer a hint?')
   await alice.page.getByRole('button', { name: 'Send message' }).click()

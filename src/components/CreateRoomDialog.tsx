@@ -21,6 +21,7 @@ export default function CreateRoomDialog({ open, finalFocus, onClose, onCreated 
 
   async function createRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (creating) return
     const name = roomName.trim()
     if (!name) return setCreateError('Enter a room name.')
     if (!challengeId) return setCreateError('Choose a coding challenge.')

@@ -14,6 +14,7 @@ import { interviewRoomsSchema } from './schemas/interview-rooms-schema'
 import { interviewReviewsSchema } from './schemas/interview-reviews-schema'
 import { roomMembersSchema } from './schemas/room-members-schema'
 import { aiCoachRateLimitsSchema } from './schemas/ai-coach-rate-limits-schema'
+import { aiCoachMessagesSchema } from './schemas/ai-coach-messages-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -21,5 +22,6 @@ export const schemas: CollectionSchema[] = [
   interviewRoomsSchema,
   roomMembersSchema,
   aiCoachRateLimitsSchema,
+  aiCoachMessagesSchema,
   interviewReviewsSchema,
 ]

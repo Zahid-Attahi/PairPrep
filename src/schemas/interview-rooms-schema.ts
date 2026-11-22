@@ -14,6 +14,13 @@ export const interviewRoomsSchema: CollectionSchema = {
     },
     { name: 'teamId', storage: 'text', interpretation: 'plain', immutable: true, required: true },
     { name: 'challengeId', storage: 'text', interpretation: 'plain', required: true },
+    { name: 'completed', storage: 'number', interpretation: 'plain' },
+    {
+      name: 'completedAt',
+      storage: 'text',
+      interpretation: 'plain',
+      timestampTrigger: { field: 'completed', value: 1 },
+    },
   ],
   ownerField: 'ownerId',
   teamField: 'teamId',

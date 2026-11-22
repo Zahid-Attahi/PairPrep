@@ -23,6 +23,7 @@ test.describe('Smoke tests', () => {
     await page.goto('/')
     await waitForApp(page)
     await expect(page.getByTestId('static-landing')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Practice technical interviews together.' })).toBeVisible()
     expect(errors).toEqual([])
   })
 

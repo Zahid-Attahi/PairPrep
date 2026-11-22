@@ -9,7 +9,7 @@ import { prerender } from './prerender.ts'
 
 const appDir = fileURLToPath(new URL('.', import.meta.url))
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     generouted(),
@@ -20,6 +20,22 @@ export default defineConfig({
     // the generated app and keep local dev/test startup deterministic.
     cloudflare({
       inspectorPort: false,
+      ...(command === 'serve' && process.env.PAIRPREP_MOCK_INTEGRATIONS === '1' && {
+        config: (config) => ({
+          services: [
+            ...(config.services ?? []).filter((service) => service.binding !== 'API_WORKER'),
+            { binding: 'API_WORKER', service: 'pairprep-integration-mock' },
+          ],
+        }),
+        auxiliaryWorkers: [{
+          devOnly: true,
+          config: {
+            name: 'pairprep-integration-mock',
+            main: fileURLToPath(new URL('./tests/integration-mock.ts', import.meta.url)),
+            compatibility_date: '2025-01-01',
+          },
+        }],
+      }),
     }),
     // The app id `define`, the preview-secret cleanup, and the client dedupe
     // hint — all shipped by the SDK so a fix to any of them arrives with a
@@ -64,4 +80,4 @@ export default defineConfig({
     // Dev-only; `vite build` ignores optimizeDeps.
     entries: ['./index.html', './src/pages/**/*.tsx'],
   },
-})
+}))

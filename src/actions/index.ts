@@ -10,6 +10,7 @@ interface InterviewRoomData extends Record<string, unknown> {
   ownerId: string
   teamId: string
   challengeId: string
+  completedAt?: string
 }
 
 interface RoomMemberData extends Record<string, unknown> {
@@ -223,6 +224,63 @@ export const actions: Record<string, ActionHandler<Env>> = {
     return { success: true, data: { userIds } }
   },
 
+  'rooms.members.remove': async ({ params, tools, userId, env }) => {
+    const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
+    const participantId = typeof params.participantId === 'string' ? params.participantId.trim() : ''
+    if (!roomId || roomId.length > 128) return failure('A valid room is required.')
+    if (!participantId || participantId.length > 128) return failure('A valid participant is required.')
+
+    const room = await getRoomAccess(tools, roomId, userId)
+    if (!room) return failure('Room not found, or you do not have access.')
+    if (room.ownerId !== userId) return failure('Only the room owner can remove participants.')
+    if (participantId === room.ownerId) return failure('The room owner cannot be removed.')
+    if (!room.teamId) return failure('Room membership data is invalid.')
+
+    const result = await tools.deleteWhere('team_members', {
+      teamId: room.teamId, userId: participantId,
+    }, 1)
+    if (!result.success) return failure('Could not remove the participant. Try again.')
+
+    // Retry the reconnect even if the membership was already deleted.
+    const refreshed = await reconnectRoomClients(env)
+    return { success: true, data: { removed: result.data.deleted > 0, refreshed } }
+  },
+
+  'rooms.complete': async ({ params, tools, userId }) => {
+    const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
+    if (!roomId || roomId.length > 128) return failure('A valid room is required.')
+    const room = await getRoomAccess(tools, roomId, userId)
+    if (!room) return failure('Room not found, or you do not have access.')
+    if (room.ownerId !== userId) return failure('Only the room owner can complete a session.')
+    if (room.completedAt) return { success: true, data: { completed: true } }
+
+    // RecordRoom stamps completedAt only on the transition to completed.
+    const result = await tools.update('interviewRooms', roomId, { completed: 1 })
+    if (!result.success) return failure('Could not complete the session. Try again.')
+    return { success: true, data: { completed: true } }
+  },
+
+  'rooms.reviews.create': async ({ params, tools, userId }) => {
+    const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
+    if (!roomId || roomId.length > 128) return failure('A valid room is required.')
+    const feedback = typeof params.feedback === 'string' ? params.feedback.trim() : ''
+    const strengths = typeof params.strengths === 'string' ? params.strengths.trim() : ''
+    const improvements = typeof params.improvements === 'string' ? params.improvements.trim() : ''
+    if ([feedback, strengths, improvements].some((field) => !field || field.length > 2000)) {
+      return failure('Enter 1 to 2,000 characters in each feedback field.')
+    }
+
+    const room = await getRoomAccess(tools, roomId, userId)
+    if (!room) return failure('Room not found, or you do not have access.')
+    if (!room.completedAt) return failure('Complete the session before writing a review.')
+
+    const result = await tools.create('interviewReviews', {
+      candidateId: userId, roomId, feedback, strengths, improvements,
+    })
+    if (!result.success) return failure('Could not save the review. Try again.')
+    return result
+  },
+
   'rooms.coach': async ({ params, tools, userId }) => {
     const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
     const message = typeof params.message === 'string' ? params.message.trim() : ''
@@ -232,35 +290,54 @@ export const actions: Record<string, ActionHandler<Env>> = {
       return failure('Enter a message of 1 to 1,200 characters.')
     }
 
-    // ActionTools bypasses record RBAC; verify room access before using its data.
+    // ActionTools bypasses record RBAC; verify access before reading or writing.
     const room = await getRoomAccess(tools, roomId, userId)
     if (!room) return failure('Room not found, or you do not have access.')
     const challenge = getChallenge(room.challengeId)
     if (!challenge) return failure('This room’s challenge is unavailable.')
 
-    const rawHistory = params.history
-    if (rawHistory !== undefined && !Array.isArray(rawHistory)) {
-      return failure('The conversation could not be used. Start a new conversation.')
+    // Conversation history is server-owned; never trust browser-supplied history.
+    const historyResult = await tools.query<{
+      userId: string
+      roomId: string
+      role: string
+      content: string
+      createdAt: string
+    }>('aiCoachMessages', {
+      where: { userId, roomId },
+      orderBy: 'createdAt',
+      orderDir: 'desc',
+      limit: 16,
+    })
+    if (!historyResult.success) {
+      return failure('Could not load your conversation. Please try again.')
     }
-    const history = (Array.isArray(rawHistory) ? rawHistory : []).slice(-8)
-    const messages: CoachMessage[] = []
-    for (const item of history) {
-      if (
-        !item || typeof item !== 'object' ||
-        !('role' in item) || !('content' in item) ||
-        (item.role !== 'user' && item.role !== 'assistant') ||
-        typeof item.content !== 'string' || item.content.length > 1200
-      ) {
-        return failure('The conversation could not be used. Start a new conversation.')
-      }
-      messages.push({ role: item.role, content: item.content })
-    }
-    messages.push({ role: 'user', content: message })
+
+    const history: CoachMessage[] = historyResult.data.records
+      .map((record) => record.data)
+      .reverse()
+      .filter((item): item is typeof item & { role: 'user' | 'assistant' } =>
+        (item.role === 'user' || item.role === 'assistant') &&
+        typeof item.content === 'string' &&
+        item.content.length <= 1200
+      )
+      .map((item) => ({ role: item.role, content: item.content }))
 
     const reservation = await reserveHourlyAiRequest(tools, userId)
     if (reservation === 'unavailable') return failure('Could not verify the AI coach request limit. Please try again.')
     if (reservation === 'limited') {
       return failure('You’ve reached the limit of 20 AI coach and research requests for this UTC hour. Please try again after the hour resets.')
+    }
+
+    const userMessage = await tools.create('aiCoachMessages', {
+      userId,
+      roomId,
+      role: 'user',
+      content: message,
+      createdAt: new Date().toISOString(),
+    })
+    if (!userMessage.success) {
+      return failure('Could not save your message. Please try again.')
     }
 
     const systemMessage = [
@@ -274,18 +351,62 @@ export const actions: Record<string, ActionHandler<Env>> = {
     try {
       result = await tools.integration<ChatCompletionData>('openai/chat-completion', {
         model: 'gpt-5.6-terra',
-        messages: [{ role: 'system', content: systemMessage }, ...messages],
+        messages: [
+          { role: 'system', content: systemMessage },
+          ...history,
+          { role: 'user', content: message },
+        ],
       })
     } catch {
-      return failure('The AI coach is temporarily unavailable. Please try again.')
+      return failure('The AI coach is temporarily unavailable. Your message was saved; you can try again.')
     }
-    if (!result.success) return failure('The AI coach is temporarily unavailable. Please try again.')
+    if (!result.success) {
+      return failure('The AI coach is temporarily unavailable. Your message was saved; you can try again.')
+    }
 
-    const reply = result.data.choices?.[0]?.message?.content
+    const reply = result.data?.choices?.[0]?.message?.content
     if (typeof reply !== 'string' || !reply.trim()) {
-      return failure('The AI coach did not return a usable response. Please try again.')
+      return failure('The AI coach did not return a usable response. Your message was saved; please try again.')
     }
+
+    const assistantMessage = await tools.create('aiCoachMessages', {
+      userId,
+      roomId,
+      role: 'assistant',
+      content: reply.trim(),
+      createdAt: new Date().toISOString(),
+    })
+    if (!assistantMessage.success) {
+      return failure('The reply could not be saved. Please refresh the conversation before trying again.')
+    }
+
     return { success: true, data: { reply: reply.trim() } }
+  },
+
+  'rooms.coach.clear': async ({ params, tools, userId }) => {
+    const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
+    if (!userId) return failure('Sign in to clear your conversation.')
+    if (!roomId || roomId.length > 128) return failure('A valid room is required.')
+
+    // Verify access before deleting; clear only this user's messages in this room.
+    const room = await getRoomAccess(tools, roomId, userId)
+    if (!room) return failure('Room not found, or you do not have access.')
+
+    for (let batch = 0; batch < 20; batch += 1) {
+      const result = await tools.deleteWhere(
+        'aiCoachMessages',
+        { userId, roomId },
+        500,
+      )
+      if (!result.success) {
+        return failure('Could not completely clear your conversation. Please try again.')
+      }
+      if (result.data.deleted < 500) {
+        return { success: true, data: { cleared: true } }
+      }
+    }
+
+    return failure('Your conversation is large and could not be completely cleared. Please try again.')
   },
 
   'rooms.research': async ({ params, tools, userId }) => {
@@ -316,7 +437,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
     if (!result.success) {
       return failure('Technical research is temporarily unavailable. Please try again.')
     }
-    if (!Array.isArray(result.data.results)) {
+    if (!Array.isArray(result.data?.results)) {
       return failure('Technical research returned an unexpected response. Please try again.')
     }
 
@@ -329,7 +450,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
       if (!title || title.length > 300 || url.length > 2048) continue
       try {
         const parsedUrl = new URL(url)
-        if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') continue
+        if (parsedUrl.protocol !== 'https:') continue
       } catch {
         continue
       }

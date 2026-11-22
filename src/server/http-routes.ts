@@ -32,6 +32,38 @@ import type { ExpoAuthBridgeOptions, JwtVerifierConfig, VerifyResult } from 'dee
 import { integrations } from '../integrations.js'
 import type { AppContext, Env } from '../../worker.js'
 
+// These developer-billed providers are used only behind room-authorized
+// actions, which enforce membership and the shared request limit. Do not let
+// the generic browser proxy bypass those checks or send arbitrary email.
+const SERVER_ACTION_ONLY_INTEGRATIONS = new Set(['openai', 'exa', 'email'])
+
+const LOCAL_SESSION_COOKIE = 'pairprep.local_session'
+
+function isLoopbackHttp(url: URL): boolean {
+  return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+}
+
+function sessionCookie(value: string, maxAge: number, local: boolean): string {
+  const name = local ? LOCAL_SESSION_COOKIE : SESSION_COOKIE
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${local ? '' : '; Secure'}`
+}
+
+function authRequestHeaders(request: Request): Headers {
+  const headers = new Headers(request.headers)
+  if (!isLoopbackHttp(new URL(request.url))) return headers
+
+  const cookies = (headers.get('Cookie') ?? '').split(';').map((cookie) => cookie.trim())
+  const local = cookies.find((cookie) => cookie.startsWith(`${LOCAL_SESSION_COOKIE}=`))
+  if (local) {
+    // WebKit rejects the Secure cookie on loopback HTTP. Forward the original
+    // signed value under the SDK's cookie name so DeepSpace still validates it.
+    const otherCookies = cookies.filter((cookie) =>
+      !cookie.startsWith(`${LOCAL_SESSION_COOKIE}=`) && !cookie.startsWith(`${SESSION_COOKIE}=`))
+    headers.set('Cookie', [`${SESSION_COOKIE}=${local.slice(LOCAL_SESSION_COOKIE.length + 1)}`, ...otherCookies].join('; '))
+  }
+  return headers
+}
+
 function jwtConfig(env: Env): JwtVerifierConfig {
   return { publicKey: env.AUTH_JWT_PUBLIC_KEY, issuer: env.AUTH_JWT_ISSUER }
 }
@@ -100,11 +132,11 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
       return nativeAuthCallback(c.req.raw, c.env, nativeAuthOptions(c.env))
     }
     const code = c.req.query('code')
-    const appOrigin = new URL(c.req.url).origin
+    const url = new URL(c.req.url)
     // Land the signed-in user in the app, not on the static landing. `/` is a
     // static page (no auth/realtime providers), so redirecting there after auth
     // would strand the user; `/home` is the dynamic app boundary.
-    const appHome = `${appOrigin}/home`
+    const appHome = `${url.origin}/home`
 
     if (!code) return c.redirect(appHome)
 
@@ -123,7 +155,7 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
       status: 302,
       headers: {
         Location: appHome,
-        'Set-Cookie': `${SESSION_COOKIE}=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`,
+        'Set-Cookie': sessionCookie(sessionToken, 2592000, isLoopbackHttp(url)),
       },
     })
   })
@@ -132,7 +164,7 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
     try {
       await authWorkerFetch(c.env, '/api/auth/sign-out', {
         method: c.req.method,
-        headers: c.req.raw.headers,
+        headers: authRequestHeaders(c.req.raw),
         body: c.req.method !== 'GET' && c.req.method !== 'HEAD' ? c.req.raw.body : undefined,
       })
     } catch {
@@ -140,13 +172,11 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
       // failure must not leave the browser immediately signed back in.
     }
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
-      },
-    })
+    const headers = new Headers({ 'Set-Cookie': sessionCookie('', 0, false) })
+    if (isLoopbackHttp(new URL(c.req.url))) {
+      headers.append('Set-Cookie', sessionCookie('', 0, true))
+    }
+    return Response.json({ success: true }, { headers })
   })
 
   // Auth proxy → auth-worker (same-origin cookies).
@@ -154,13 +184,17 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
     const url = new URL(c.req.url)
     const res = await authWorkerFetch(c.env, url.pathname + url.search, {
       method: c.req.method,
-      headers: c.req.raw.headers,
+      headers: authRequestHeaders(c.req.raw),
       body: c.req.method !== 'GET' && c.req.method !== 'HEAD' ? c.req.raw.body : undefined,
     })
     const headers = new Headers(res.headers)
-    const setCookie = headers.get('set-cookie')
-    if (setCookie) {
-      headers.set('set-cookie', setCookie.replace(/;\s*Domain=[^;]*/gi, ''))
+    const cookies = headers.getSetCookie()
+    headers.delete('Set-Cookie')
+    for (const cookie of cookies) {
+      const hostCookie = cookie.replace(/;\s*Domain=[^;]*/gi, '')
+      headers.append('Set-Cookie', isLoopbackHttp(url) && hostCookie.startsWith(`${SESSION_COOKIE}=`)
+        ? hostCookie.replace(SESSION_COOKIE, LOCAL_SESSION_COOKIE).replace(/;\s*Secure(?=;|$)/i, '')
+        : hostCookie)
     }
     return new Response(res.body, { status: res.status, headers })
   })
@@ -247,6 +281,9 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
     if (!auth && (billingMode === 'user' || !config?.anonymous)) {
       return c.json({ error: 'Sign in required for this integration' }, 401)
     }
+    if (SERVER_ACTION_ONLY_INTEGRATIONS.has(integrationName.toLowerCase())) {
+      return c.json({ error: 'This integration is only available through authorized PairPrep actions.' }, 403)
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': c.req.header('Content-Type') ?? 'application/json',
@@ -292,8 +329,11 @@ export function registerPlatformProxyRoutes(app: Hono<AppContext>): void {
     // A same-origin GET/HEAD with no bearer is identified by the app-origin
     // session cookie, so a private file URL renders in <img>/<audio>/<video>.
     // The fallback lives here, not in resolveAuth, which also gates writes.
-    const auth =
-      (await resolveAuth(c.req.raw, c.env)) ?? (await resolveSessionReadAuth(c.req.raw, c.env))
+    const request = c.req.raw
+    const sessionRequest = (request.method === 'GET' || request.method === 'HEAD') && isLoopbackHttp(new URL(request.url))
+      ? new Request(request, { headers: authRequestHeaders(request) })
+      : request
+    const auth = (await resolveAuth(request, c.env)) ?? (await resolveSessionReadAuth(sessionRequest, c.env))
     const userId = auth?.userId ?? null
 
     const url = new URL(c.req.url)
