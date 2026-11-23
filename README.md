@@ -1,5 +1,7 @@
 # PairPrep
 
+**Live Demo:** https://pairprep.app.space
+
 PairPrep is a collaborative workspace for technical interview practice. Create a private room around a curated coding challenge, invite a partner, and work through your approach in shared notes. After practice, the room owner can mark the session complete, and each participant can save a private self-review.
 
 ## Features
