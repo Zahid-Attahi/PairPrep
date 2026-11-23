@@ -100,3 +100,6 @@ For browser tests, install Chromium with `npx playwright install chromium` if ne
 [GitHub — Zahid-Attahi/PairPrep](https://github.com/Zahid-Attahi/PairPrep)
 
 Built by Zahid Attahi as a full-stack engineering portfolio project.
+
+## Development
+PairPrep is actively maintained and improved through testing and feature development.
