@@ -6,6 +6,7 @@ import { cloudflare } from '@cloudflare/vite-plugin'
 import checker from 'vite-plugin-checker'
 import { deepspaceBuild } from 'deepspace/build'
 import { prerender } from './prerender.ts'
+import { browserRunnerBundle } from './src/runner/bundle.ts'
 
 const appDir = fileURLToPath(new URL('.', import.meta.url))
 
@@ -13,6 +14,7 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     generouted(),
+    browserRunnerBundle(),
     // The Cloudflare plugin otherwise searches for a free inspector port by
     // enumerating every network interface. Restricted agent containers can
     // reject that OS call (`uv_interface_addresses`) even when loopback is
@@ -78,6 +80,6 @@ export default defineConfig(({ command }) => ({
     // Scoped to src/pages (NOT all of src) so worker-only modules — actions, cron, jobs,
     // ai, which import deepspace/worker — are not dragged into the client optimizer.
     // Dev-only; `vite build` ignores optimizeDeps.
-    entries: ['./index.html', './src/pages/**/*.tsx'],
+    entries: ['./index.html', './src/pages/**/*.tsx', './src/components/RoomCodeEditor.tsx'],
   },
 }))

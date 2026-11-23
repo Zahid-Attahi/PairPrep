@@ -17,26 +17,26 @@
  * they stay consistent across every preset.
  */
 @theme {
-  /* shadcn core tokens — slate (default): neutral gray on near-black, indigo accent */
-  --color-background: #0a0a0a;
-  --color-foreground: #e8eaed;
-  --color-card: #161616;
-  --color-card-foreground: #e8eaed;
-  --color-popover: #161616;
-  --color-popover-foreground: #e8eaed;
-  --color-primary: #818cf8;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #1e1e1e;
-  --color-secondary-foreground: #e8eaed;
-  --color-muted: #1e1e1e;
-  --color-muted-foreground: #9ca3af;
-  --color-accent: #262626;
-  --color-accent-foreground: #e8eaed;
-  --color-destructive: #ef4444;
-  --color-destructive-foreground: #ffffff;
-  --color-border: rgba(60, 64, 67, 0.6);
-  --color-input: rgba(60, 64, 67, 0.6);
-  --color-ring: #818cf8;
+  /* PairPrep’s default dark palette. */
+  --color-background: #101315;
+  --color-foreground: #f1f5f3;
+  --color-card: #171c1e;
+  --color-card-foreground: #f1f5f3;
+  --color-popover: #171c1e;
+  --color-popover-foreground: #f1f5f3;
+  --color-primary: #91e8b5;
+  --color-primary-foreground: #10241b;
+  --color-secondary: #202729;
+  --color-secondary-foreground: #f1f5f3;
+  --color-muted: #202729;
+  --color-muted-foreground: #aab7b5;
+  --color-accent: #283234;
+  --color-accent-foreground: #f1f5f3;
+  --color-destructive: #ff9797;
+  --color-destructive-foreground: #321414;
+  --color-border: #303b3d;
+  --color-input: #303b3d;
+  --color-ring: #91e8b5;
   --radius: 0.5rem;
 
   /*
@@ -88,8 +88,8 @@
      simply doesn't reference them. In every theme keep the panel reading as
      elevated: dark → panel lighter than shell; light → white panel on a
      faintly darker shell. */
-  --color-shell: #0a0a0a;
-  --color-shell-panel: #161616;
+  --color-shell: #101315;
+  --color-shell-panel: #171c1e;
 
   /* Animations */
   --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
@@ -230,5 +230,31 @@
   /* Prevent 300ms tap delay on mobile */
   a, button, [role="button"], input, select, textarea {
     touch-action: manipulation;
+  }
+}
+
+.landing-grid {
+  background-color: var(--color-background);
+  background-image: linear-gradient(to right, #91e8b509 1px, transparent 1px),
+    linear-gradient(to bottom, #91e8b509 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+@layer base {
+  :where(a, button, input, textarea, select):focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 3px;
+  }
+
+  ::selection {
+    background: var(--color-primary);
+    color: var(--color-primary-foreground);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

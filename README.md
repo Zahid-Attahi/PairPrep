@@ -82,6 +82,12 @@ For browser tests, install Chromium with `npx playwright install chromium` if ne
 
 ## Known limitations and future work
 
+- Room calls support two people and use browser WebRTC. The room's authenticated Durable Object relays offers, answers, ICE candidates, and call presence. Audio and video travel peer to peer. PairPrep has no recording or media storage, and leaving stops local capture.
+- Calls require HTTPS or localhost and a browser with WebRTC. They default to the public Google STUN endpoint used in the WebRTC examples. STUN discovers network addresses and does not relay media. Set `VITE_CALL_STUN_URL` to a different STUN URL, or to an empty string for host-only local tests. STUN and peers can see connectivity addresses. Calls can fail behind restrictive firewalls or NATs because PairPrep has no TURN relay. No paid video service is configured.
+
+- Run Code executes Python (MicroPython) and JavaScript (QuickJS) in the user's browser. Standard input is available through Python's `input()` and JavaScript's `readLine()`. Java syntax highlighting remains available. Java execution and full CPython package compatibility are outside the browser runner's scope.
+- Each execution gets a fresh WebAssembly runtime in a worker owned by an opaque-origin sandboxed iframe. The iframe's CSP blocks network access apart from local blob reads needed to load WASM. QuickJS has no browser bindings and the MicroPython global JS bridge is disabled at bundle time. Jobs have a 3-second execution deadline and 8 KiB per output stream. Each interpreter has a 32 MiB heap limit, but browser memory overhead is outside it. Hostile programs can still consume device resources, particularly if a browser throttles timers or has a security vulnerability.
+
 - One completion is recorded per room. History represents completed rooms visible under current membership, so removing a collaborator removes that room from their history. Returning to an older room does not create a new session.
 - Reviews are private, append-only self-reviews. Peer feedback and review editing are possible future work.
 - Invitees need a registered PairPrep account. Membership remains active if email delivery fails. A resend flow is future work.

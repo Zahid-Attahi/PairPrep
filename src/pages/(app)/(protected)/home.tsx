@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, useQuery } from 'deepspace'
 import {
   ArrowRight,
+  ArrowUpRight,
   Clock3,
   Code2,
   Plus,
@@ -55,21 +56,26 @@ export default function HomePage() {
 
   return (
     <div className="min-h-full bg-background text-foreground">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <header className="flex flex-col gap-6 border-b border-border pb-8 sm:flex-row sm:items-end sm:justify-between">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-11 lg:px-8">
+        <header className="flex flex-col gap-5 border-b border-border pb-7 sm:flex-row sm:items-end sm:justify-between">
           <div className="max-w-2xl">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Practice workspace</h1>
-            <p className="mt-2 text-sm text-muted-foreground">Open a room to practice or revisit a completed session.</p>
+            <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-[2.75rem]">Practice workspace</h1>
+            <p className="mt-2 text-sm text-muted-foreground">Start a coding session, continue practicing, or revisit your feedback.</p>
           </div>
 
-          <Button ref={createRoomButtonRef} size="lg" onClick={openCreate}>
-            <Plus aria-hidden="true" /> Create room
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button ref={createRoomButtonRef} size="lg" onClick={openCreate}>
+              <Plus aria-hidden="true" /> Create room
+            </Button>
+            <a href="#interview-history" className="rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-card hover:text-foreground lg:hidden">
+              View history
+            </a>
+          </div>
         </header>
 
-        <main className="grid items-start gap-6 py-7 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-          <section aria-labelledby="rooms-heading" className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="grid items-start gap-7 py-7 lg:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)]">
+          <section aria-labelledby="rooms-heading" className="min-w-0">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <UsersRound className="size-4 text-primary" aria-hidden="true" />
                 <h2 id="rooms-heading" className="text-lg font-semibold tracking-tight">Interview rooms</h2>
@@ -77,15 +83,15 @@ export default function HomePage() {
               {status === 'ready' && rooms.length > 0 && <Badge variant="outline">{rooms.length} {rooms.length === 1 ? 'room' : 'rooms'}</Badge>}
             </div>
 
-            <div className="border-t border-border bg-background/40">
+            <div className="min-w-0">
               {status === 'loading' && (
-                <div role="status" className="flex min-h-[230px] items-center justify-center text-sm text-muted-foreground">
+                <div role="status" className="flex min-h-[230px] items-center justify-center rounded-xl border border-border bg-card text-sm text-muted-foreground">
                   Loading your rooms…
                 </div>
               )}
               {status === 'error' && (
                 <EmptyState
-                  className="min-h-[230px] px-6 py-10"
+                  className="min-h-[230px] rounded-xl border border-border bg-card px-6 py-10"
                   icon={<UsersRound className="text-destructive" aria-hidden="true" />}
                   title="Rooms could not be loaded"
                   description={error || 'Check your connection and refresh the page to try again.'}
@@ -93,15 +99,15 @@ export default function HomePage() {
               )}
               {status === 'ready' && rooms.length === 0 && (
                 <EmptyState
-                  className="min-h-[270px] px-6 py-12"
+                  className="min-h-[250px] rounded-xl border border-dashed border-border bg-card px-6 py-10"
                   icon={<UsersRound className="text-primary" aria-hidden="true" />}
-                  title="Your rooms will show up here"
-                  description="Create a room to choose a challenge and invite someone to practice with you. Your sessions will be easy to find whenever you come back."
+                  title="No interview rooms yet"
+                  description="Choose a challenge and invite a partner to your first practice session."
                   action={{ label: 'Create your first room', onClick: openCreate }}
                 />
               )}
               {status === 'ready' && rooms.length > 0 && (
-                <ul className="divide-y divide-border">
+                <ul className="grid gap-3 sm:grid-cols-2">
                   {rooms.map((room) => {
                     const challenge = getChallenge(room.data.challengeId)
                     const isOwner = room.data.ownerId === userId
@@ -109,25 +115,23 @@ export default function HomePage() {
                       <li key={room.recordId}>
                         <Link
                           to={`/rooms/${encodeURIComponent(room.recordId)}`}
-                          className="group flex flex-col gap-3 p-5 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:flex-row sm:items-center sm:justify-between sm:px-6"
+                          className="group flex h-full min-h-40 flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/45 hover:bg-secondary/60"
                         >
-                          <span className="flex min-w-0 items-start gap-3">
-                            <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                          <span className="flex items-start justify-between">
+                            <span className="grid size-9 place-items-center rounded-lg border border-primary/15 bg-primary/10 text-primary">
                               <Code2 className="size-4" aria-hidden="true" />
                             </span>
-                            <span className="min-w-0">
-                              <span className="block truncate font-medium group-hover:text-primary">{room.data.name}</span>
-                              <span className="mt-1 block text-sm text-muted-foreground">
-                                {challenge ? `${challenge.title} · ${challenge.difficulty}` : 'Challenge unavailable'}
-                              </span>
+                            <ArrowUpRight className="size-4 text-muted-foreground transition-colors group-hover:text-primary" aria-hidden="true" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block break-words font-semibold">{room.data.name}</span>
+                            <span className="mt-1 block text-sm text-muted-foreground">
+                              {challenge ? `${challenge.title} · ${challenge.difficulty}` : 'Challenge unavailable'}
                             </span>
                           </span>
-                          <span className="flex items-center justify-between gap-3 pl-12 sm:pl-0">
-                            <div className="flex flex-wrap gap-2">
-                              {room.data.completedAt && <Badge variant="secondary">Complete</Badge>}
-                              <Badge variant={isOwner ? 'secondary' : 'outline'}>{isOwner ? 'Owner' : 'Collaborator'}</Badge>
-                            </div>
-                            <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                          <span className="mt-auto flex flex-wrap gap-2">
+                            <Badge variant="outline">{isOwner ? 'Owner' : 'Collaborator'}</Badge>
+                            {room.data.completedAt && <Badge variant="secondary">Complete</Badge>}
                           </span>
                         </Link>
                       </li>
@@ -138,14 +142,14 @@ export default function HomePage() {
             </div>
           </section>
 
-          <section aria-labelledby="activity-heading" className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div className="flex items-center gap-2 p-5 sm:p-6">
+          <section id="interview-history" tabIndex={-1} aria-labelledby="activity-heading" className="min-w-0 scroll-mt-4">
+            <div className="mb-3 flex items-center gap-2">
               <Clock3 className="size-4 text-primary" aria-hidden="true" />
               <div>
                 <h2 id="activity-heading" className="text-lg font-semibold tracking-tight">Interview history</h2>
               </div>
             </div>
-            <div className="border-t border-border bg-background/40">
+            <div className="overflow-hidden rounded-xl border border-border bg-card">
               {historyStatus === 'loading' && <p role="status" className="p-5 text-sm text-muted-foreground">Loading interview history…</p>}
               {historyStatus === 'error' && <p role="alert" className="p-5 text-sm text-destructive">Could not load interview history.</p>}
               {historyStatus === 'ready' && completedRooms.length === 0 && (
@@ -165,8 +169,8 @@ export default function HomePage() {
                           </p>
                         </div>
                         {reviewsStatus === 'ready' && (
-                          <Link to={`${roomUrl}#reviews`} className="text-sm font-medium text-primary hover:underline">
-                            {reviewed ? 'View reviews' : 'No review yet · Write one'}
+                          <Link to={`${roomUrl}#reviews`} className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+                            {reviewed ? 'View reviews' : 'Write a review'} <ArrowRight className="size-3.5" aria-hidden="true" />
                           </Link>
                         )}
                         {reviewsStatus === 'loading' && <span className="text-sm text-muted-foreground">Loading review status…</span>}
@@ -178,7 +182,7 @@ export default function HomePage() {
               )}
             </div>
           </section>
-        </main>
+        </div>
       </div>
 
       {createDialogLoaded && (

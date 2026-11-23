@@ -38,6 +38,19 @@ test.describe('Smoke tests', () => {
     expect(await page.locator('head link[rel="canonical"]').count()).toBe(1)
   })
 
+  test('landing actions open the workspace and sign-in on mobile', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 })
+    await page.goto('/')
+    await expect(page.getByText('Example session', { exact: true })).toBeVisible()
+    expect(await page.locator('body').evaluate((body) => body.scrollWidth)).toBe(360)
+    await page.getByRole('link', { name: 'Get started' }).click()
+    await expect(page).toHaveURL(/\/home$/)
+    await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible()
+    await page.goto('/')
+    await page.getByRole('link', { name: 'Sign in', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Sign in to DeepSpace' })).toBeVisible()
+  })
+
   test('static contract: landing fires no auth request, opens no websocket', async ({ page }) => {
     const offenders: string[] = []
     page.on('request', (req) => {

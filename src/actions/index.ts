@@ -4,6 +4,7 @@ import type { Env } from '../../worker'
 import { getChallenge, isChallengeId } from '../challenges'
 import { APP_NAME } from '../constants'
 import { seo } from '../seo'
+import { createCodeRunActions } from '../server/code-run'
 
 interface InterviewRoomData extends Record<string, unknown> {
   name: string
@@ -50,7 +51,7 @@ function failure(error: string) {
   return { success: false as const, error }
 }
 
-async function getRoomAccess(
+export async function getRoomAccess(
   tools: Parameters<ActionHandler<Env>>[0]['tools'],
   roomId: string,
   callerId: string,
@@ -109,7 +110,13 @@ async function reconnectRoomClients(env: Env): Promise<boolean> {
   }
 }
 
+// No execution adapter is wired until an isolated sandbox is approved.
+const codeRun = createCodeRunActions(async ({ tools, userId }, roomId) =>
+  Boolean(await getRoomAccess(tools, roomId, userId)))
+
 export const actions: Record<string, ActionHandler<Env>> = {
+  'rooms.code.status': codeRun.status,
+  'rooms.code.run': codeRun.run,
   'rooms.create': async ({ params, tools, userId }) => {
     const name = typeof params.name === 'string' ? params.name.trim() : ''
     if (!name || name.length > 80) return failure('Enter a room name of 1 to 80 characters.')
@@ -224,7 +231,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
     return { success: true, data: { userIds } }
   },
 
-  'rooms.members.remove': async ({ params, tools, userId, env }) => {
+  'rooms.members.remove': async ({ params, tools, userId }) => {
     const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
     const participantId = typeof params.participantId === 'string' ? params.participantId.trim() : ''
     if (!roomId || roomId.length > 128) return failure('A valid room is required.')
@@ -238,12 +245,10 @@ export const actions: Record<string, ActionHandler<Env>> = {
 
     const result = await tools.deleteWhere('team_members', {
       teamId: room.teamId, userId: participantId,
-    }, 1)
-    if (!result.success) return failure('Could not remove the participant. Try again.')
+    }, 1).catch(() => null)
+    if (!result?.success) return failure('Could not remove the participant. Try again.')
 
-    // Retry the reconnect even if the membership was already deleted.
-    const refreshed = await reconnectRoomClients(env)
-    return { success: true, data: { removed: result.data.deleted > 0, refreshed } }
+    return { success: true, data: { removed: result.data.deleted > 0, refreshed: true } }
   },
 
   'rooms.complete': async ({ params, tools, userId }) => {

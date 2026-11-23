@@ -14,11 +14,7 @@ const review = {
 }
 
 function setup(completedAt?: string) {
-  const disconnect = vi.fn(async () => new Response(null, { status: 200 }))
-  const env = {
-    DEEPSPACE_APP_ID: 'test',
-    RECORD_ROOMS: { idFromName: (name: string) => name, get: () => ({ fetch: disconnect }) },
-  } as unknown as Env
+  const env = {} as Env
   let activeMember = true
   const tools = {
     get: vi.fn().mockResolvedValue({
@@ -45,7 +41,6 @@ function setup(completedAt?: string) {
   }
   return {
     tools,
-    disconnect,
     run: (name: string, userId: string, params: Record<string, unknown>) =>
       actions[name]({ userId, params, tools: tools as unknown as ActionTools, env, callerJwt: 'test-token' }),
   }
@@ -101,8 +96,8 @@ describe('interview session actions', () => {
     expect(tools.deleteWhere).not.toHaveBeenCalled()
   })
 
-  it('revokes room actions, refreshes connections, and accepts repeated removals', async () => {
-    const { run, tools, disconnect } = setup('2026-11-20T10:00:00.000Z')
+  it('revokes room actions and accepts repeated removals', async () => {
+    const { run, tools } = setup('2026-11-20T10:00:00.000Z')
     const params = { roomId: 'room-1', participantId: 'member' }
     expect(await run('rooms.members', 'member', params)).toMatchObject({ success: true })
     expect(await run('rooms.members.remove', 'owner', params)).toEqual({
@@ -125,22 +120,21 @@ describe('interview session actions', () => {
     expect(await run('rooms.members.remove', 'owner', params)).toEqual({
       success: true, data: { removed: false, refreshed: true },
     })
-    expect(disconnect).toHaveBeenCalledTimes(2)
     expect(tools.create).not.toHaveBeenCalled()
     expect(tools.integration).not.toHaveBeenCalled()
   })
 
-  it('keeps access revoked when the live reconnect fails and allows a refresh retry', async () => {
-    const { run, disconnect } = setup()
-    disconnect.mockResolvedValueOnce(new Response(null, { status: 503 }))
+  it('reports a failed membership deletion and allows a retry', async () => {
+    const { run, tools } = setup()
+    tools.deleteWhere.mockRejectedValueOnce(new Error('Storage unavailable'))
     const params = { roomId: 'room-1', participantId: 'member' }
 
     expect(await run('rooms.members.remove', 'owner', params)).toEqual({
-      success: true, data: { removed: true, refreshed: false },
+      success: false, error: 'Could not remove the participant. Try again.',
     })
-    expect(await run('rooms.members', 'member', params)).toMatchObject({ success: false })
+    expect(await run('rooms.members', 'member', params)).toMatchObject({ success: true })
     expect(await run('rooms.members.remove', 'owner', params)).toEqual({
-      success: true, data: { removed: false, refreshed: true },
+      success: true, data: { removed: true, refreshed: true },
     })
   })
 })

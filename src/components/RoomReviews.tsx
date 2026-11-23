@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useAuth, useQuery } from 'deepspace'
 import { useLocation } from 'react-router-dom'
+import { ClipboardCheck, LockKeyhole } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
 import { callServerAction } from '@/lib/server-actions'
@@ -15,9 +17,9 @@ export interface InterviewReview {
 }
 
 const fields = [
-  { name: 'feedback', label: 'Overall summary' },
-  { name: 'strengths', label: 'Strengths' },
-  { name: 'improvements', label: 'Areas for improvement' },
+  { name: 'feedback', label: 'Overall summary', placeholder: 'How did you approach the challenge?' },
+  { name: 'strengths', label: 'Strengths', placeholder: 'What worked well?' },
+  { name: 'improvements', label: 'Areas for improvement', placeholder: 'What will you practice next?' },
 ] as const
 
 export function RoomReviews({ roomId, completedAt, isOwner }: {
@@ -80,14 +82,24 @@ export function RoomReviews({ roomId, completedAt, isOwner }: {
   }
 
   return (
-    <section ref={section} id="reviews" tabIndex={-1} aria-labelledby="reviews-heading" className="mt-6 scroll-mt-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
-      <h2 id="reviews-heading" className="text-lg font-semibold">Performance reviews</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {completedAt
-          ? <>Completed <time dateTime={completedAt}>{new Date(completedAt).toLocaleDateString()}</time>. Your self-reviews are private.</>
-          : 'The room owner can mark the session complete when practice is finished.'}
-      </p>
-      {!completedAt && isOwner && <Button className="mt-4" variant="outline" loading={pending} onClick={() => void complete()}>Mark session complete</Button>}
+    <section ref={section} id="reviews" tabIndex={-1} aria-labelledby="reviews-heading" className="scroll-mt-4 rounded-2xl border border-border bg-card p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="reviews-heading" className="flex items-center gap-2 text-lg font-semibold"><ClipboardCheck className="size-4 text-primary" aria-hidden="true" /> Performance reviews</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {completedAt
+              ? <>Completed <time dateTime={completedAt}>{new Date(completedAt).toLocaleDateString()}</time>.</>
+              : 'Complete the session to start a self-review.'}
+          </p>
+        </div>
+        <Badge variant="outline" className="gap-1.5 text-muted-foreground"><LockKeyhole className="size-3" aria-hidden="true" /> Private to you</Badge>
+      </div>
+      {!completedAt && isOwner && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/50 p-3.5">
+          <p className="text-sm text-muted-foreground">Finished practicing? Add this session to interview history.</p>
+          <Button loading={pending} onClick={() => void complete()}>Mark session complete</Button>
+        </div>
+      )}
 
       {status === 'loading' && <p role="status" className="mt-4 text-sm text-muted-foreground">Loading reviews…</p>}
       {status === 'error' && <p role="alert" className="mt-4 text-sm text-destructive">Could not load your reviews.</p>}
@@ -112,13 +124,13 @@ export function RoomReviews({ roomId, completedAt, isOwner }: {
       )}
 
       {completedAt && (
-        <form onSubmit={(event) => void save(event)} className="mt-5 space-y-3 border-t border-border pt-4">
+        <form onSubmit={(event) => void save(event)} className="mt-5 rounded-xl border border-border bg-background/40 p-4">
           <fieldset disabled={pending} className="space-y-3">
-            <legend className="mb-2 text-sm font-semibold">Write a self-review</legend>
-            {fields.map(({ name, label }) => (
+            <legend className="mb-3 text-sm font-semibold">Write a self-review</legend>
+            {fields.map(({ name, label, placeholder }) => (
               <label key={name} className="block text-sm font-medium">
                 {label}
-                <Textarea name={name} required maxLength={2000} className="mt-1 min-h-20" />
+                <Textarea name={name} placeholder={placeholder} required maxLength={2000} className="mt-1.5 min-h-20 resize-y bg-background" />
               </label>
             ))}
             <Button type="submit" loading={pending}>Save review</Button>

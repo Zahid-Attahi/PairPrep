@@ -1,15 +1,19 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth, useQuery, useRecordContext, useUserLookup, useYjsText } from 'deepspace'
-import { ArrowLeft, Bot, Check, Code2, ExternalLink, FileText, MailPlus, RotateCcw, Search, Send, Sparkles, UserRound, UsersRound } from 'lucide-react'
+import { ArrowLeft, Bot, Check, ClipboardCheck, Code2, ExternalLink, FileText, MailPlus, RotateCcw, Search, Send, UserRound, UsersRound, Video } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { RoomReviews } from '@/components/RoomReviews'
+import { RoomCall } from '@/components/RoomCall'
+import { SharedNotesEditor } from '@/components/SharedNotesEditor'
 import { getChallenge } from '@/challenges'
 import { callServerAction } from '@/lib/server-actions'
+
+const RoomCodeEditor = lazy(() => import('@/components/RoomCodeEditor'))
 
 interface InterviewRoom {
   name: string
@@ -64,8 +68,7 @@ function TechnicalResearch({ roomId }: { roomId: string }) {
 
   return (
     <section id="research" tabIndex={-1} aria-labelledby="research-heading" className="min-w-0 scroll-mt-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
-      <div className="mb-2 flex items-center gap-2 text-primary"><Search className="size-4" aria-hidden="true" /><span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Explore the topic</span></div>
-      <h2 id="research-heading" className="text-lg font-semibold">Technical research</h2>
+      <h2 id="research-heading" className="flex items-center gap-2 text-lg font-semibold"><Search className="size-4 text-primary" aria-hidden="true" /> Technical research</h2>
       <p className="mt-1 text-sm text-muted-foreground">Search for sources on programming concepts, algorithms, and technologies.</p>
 
       <form onSubmit={(event) => void search(event)} className="mt-4 flex flex-col gap-2 sm:flex-row">
@@ -90,11 +93,11 @@ function TechnicalResearch({ roomId }: { roomId: string }) {
         <ol className="mt-5 divide-y divide-border rounded-xl border border-border">
           {results.map((result, index) => (
             <li key={`${result.url}-${index}`} className="p-4 first:rounded-t-xl last:rounded-b-xl">
-              <a href={result.url} target="_blank" rel="noreferrer" className="group inline-flex max-w-full items-start gap-2 font-medium text-primary hover:underline">
+              <a href={result.url} target="_blank" rel="noreferrer" className="group inline-flex max-w-full items-start gap-2 text-sm font-medium text-primary hover:underline">
                 <span className="break-words">{result.title}</span>
                 <ExternalLink className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               </a>
-              <p className="mt-1 break-all text-xs text-muted-foreground">{result.url}</p>
+              <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{result.url}</p>
             </li>
           ))}
         </ol>
@@ -177,8 +180,7 @@ function InterviewCoach({ roomId, userId }: { roomId: string; userId: string }) 
     <section id="coach" tabIndex={-1} aria-labelledby="coach-heading" className="min-w-0 scroll-mt-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="mb-2 flex items-center gap-2 text-primary"><Sparkles className="size-4" aria-hidden="true" /><span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Practice with intention</span></div>
-          <h2 id="coach-heading" className="text-lg font-semibold">AI interview coach</h2>
+          <h2 id="coach-heading" className="flex items-center gap-2 text-lg font-semibold"><Bot className="size-4 text-primary" aria-hidden="true" /> AI interview coach</h2>
           <p className="mt-1 text-sm text-muted-foreground">Ask for a hint, discuss a concept, or get feedback on your approach.</p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void clearConversation()} disabled={loading || clearing || messages.length === 0 || conversation.status !== 'ready'}>
@@ -206,7 +208,7 @@ function InterviewCoach({ roomId, userId }: { roomId: string; userId: string }) 
           {messages.map(({ recordId, data: message }) => (
             <li key={recordId} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>
               {message.role === 'assistant' && <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><Bot className="size-4" aria-hidden="true" /></span>}
-              <p className={`min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-2.5 text-sm leading-6 ${message.role === 'user' ? 'bg-primary text-primary-foreground' : 'border border-border bg-card'}`}>
+              <p className={`min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-2.5 text-sm leading-6 ${message.role === 'user' ? 'border border-primary/25 bg-primary/10 text-foreground' : 'border border-border bg-card'}`}>
                 {message.content}
               </p>
               {message.role === 'user' && <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"><UserRound className="size-4" aria-hidden="true" /></span>}
@@ -247,16 +249,10 @@ function CollaborativeRoomNotes({ roomId }: { roomId: string }) {
         : 'Changes sync live with the other participants.'
 
   return (
-    <section id="notes" tabIndex={-1} aria-labelledby="notes-heading" className="mt-6 min-w-0 scroll-mt-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
+    <section id="notes" tabIndex={-1} aria-labelledby="notes-heading" className="min-w-0 scroll-mt-4 rounded-2xl border border-border bg-card p-4 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-primary">
-            <FileText className="size-4" aria-hidden="true" />
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Work through it together</span>
-          </div>
-          <h2 id="notes-heading" className="text-lg font-semibold">Shared interview notes</h2>
-        </div>
-        <Badge variant={connected && synced ? 'secondary' : 'outline'}>
+        <h2 id="notes-heading" className="flex items-center gap-2 text-lg font-semibold"><FileText className="size-4 text-primary" aria-hidden="true" /> Shared interview notes</h2>
+        <Badge variant={connected && synced ? 'success' : 'outline'}>
           {connectionStatus === 'disconnected'
             ? 'Reconnecting'
             : !connected
@@ -267,14 +263,9 @@ function CollaborativeRoomNotes({ roomId }: { roomId: string }) {
         </Badge>
       </div>
       <p role="status" className="mt-2 text-sm text-muted-foreground">{statusMessage}</p>
-      <Textarea
-        aria-label="Shared interview notes"
-        className="mt-4 min-h-64 resize-y bg-background/60 leading-6"
-        placeholder="Capture your approach, edge cases, and follow-up questions…"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        disabled={!canEdit}
-      />
+      <div className="mt-4">
+        <SharedNotesEditor value={text} onChange={setText} disabled={!canEdit} />
+      </div>
     </section>
   )
 }
@@ -299,7 +290,12 @@ function RoomDetail({ roomId }: { roomId?: string }) {
   const [removalError, setRemovalError] = useState('')
   const [removalMessage, setRemovalMessage] = useState('')
 
-  const room = records.find((record) => record.recordId === roomId)
+  const currentRoom = records.find((record) => record.recordId === roomId)
+  const [lastRoom, setLastRoom] = useState<typeof currentRoom>()
+  // Keep the workspace mounted during a records reconnect. A fresh query that
+  // omits the room still removes the workspace immediately.
+  if (status === 'ready' && currentRoom !== lastRoom) setLastRoom(currentRoom)
+  const room = status === 'loading' ? lastRoom : currentRoom
 
   useEffect(() => {
     if (status !== 'ready' || !room) {
@@ -329,7 +325,7 @@ function RoomDetail({ roomId }: { roomId?: string }) {
     }
   }, [room?.recordId, status])
 
-  if (status === 'loading') {
+  if (status === 'loading' && !room) {
     return <main className="mx-auto max-w-4xl px-4 py-12 text-sm text-muted-foreground sm:px-6">Loading room…</main>
   }
 
@@ -419,103 +415,114 @@ function RoomDetail({ roomId }: { roomId?: string }) {
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+    <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6 lg:px-8">
       <Link to="/home" className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft className="size-4" aria-hidden="true" /> Back to workspace
       </Link>
 
-      <header className="mt-7 rounded-2xl border border-border bg-card p-5 sm:p-8">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={isOwner ? 'secondary' : 'outline'}>{isOwner ? 'You own this room' : 'Collaborator'}</Badge>
-          {challenge && <Badge variant="outline">{challenge.difficulty}</Badge>}
-          {room.data.completedAt && <Badge variant="secondary">Complete</Badge>}
+      <header className="mt-4 grid items-center gap-4 rounded-2xl border border-border bg-card p-4 sm:p-6 md:grid-cols-[minmax(0,1fr)_minmax(15rem,0.65fr)]">
+        <div className="min-w-0">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">{isOwner ? 'You own this room' : 'Collaborator'}</Badge>
+            <Badge variant={room.data.completedAt ? 'success' : 'secondary'}>{room.data.completedAt ? 'Complete' : 'In progress'}</Badge>
+          </div>
+          <h1 className="mt-3 break-words text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">{name}</h1>
         </div>
-        <h1 className="mt-4 break-words text-3xl font-semibold tracking-tight sm:text-4xl">{name}</h1>
-        <div className="mt-5 flex items-start gap-3 rounded-xl border border-border bg-background/60 p-4">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Code2 className="size-4" aria-hidden="true" /></span>
+        <div className="flex min-w-0 items-start gap-3 rounded-xl border border-border bg-background/60 p-3.5">
+          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Code2 className="size-4" aria-hidden="true" /></span>
           <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Coding challenge</p>
-            <p className="mt-1 font-medium">{challenge?.title || 'Challenge unavailable'}</p>
-            {challenge && <p className="mt-1 text-sm text-muted-foreground">{challenge.topic}</p>}
+            <p className="text-xs text-muted-foreground">Coding challenge</p>
+            <p className="mt-0.5 font-semibold">{challenge?.title || 'Challenge unavailable'}</p>
+            {challenge && <p className="mt-1 text-xs text-muted-foreground">{challenge.topic} · {challenge.difficulty}</p>}
           </div>
         </div>
       </header>
 
-      <nav aria-label="Room sections" className="mt-4 flex flex-wrap gap-2">
+      <nav aria-label="Room sections" className="my-4 flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-card/60 p-1.5">
         {[
-          ['notes', 'Shared notes'],
-          ['participants', 'Participants'],
-          ['coach', 'AI Coach'],
-          ['research', 'Research'],
-          ['reviews', 'Reviews'],
-        ].map(([id, label]) => (
-          <a key={id} href={`#${id}`} className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium hover:text-primary">
-            {label}
+          { id: 'coding', label: 'Code editor', icon: Code2 },
+          { id: 'call', label: 'Room call', icon: Video },
+          { id: 'notes', label: 'Shared notes', icon: FileText },
+          { id: 'participants', label: 'Participants', icon: UsersRound },
+          { id: 'coach', label: 'AI Coach', icon: Bot },
+          { id: 'research', label: 'Research', icon: Search },
+          { id: 'reviews', label: 'Reviews', icon: ClipboardCheck },
+        ].map(({ id, label, icon: Icon }) => (
+          <a key={id} href={`#${id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:text-sm">
+            <Icon className="size-3.5" aria-hidden="true" />{label}
           </a>
         ))}
       </nav>
 
-      <CollaborativeRoomNotes roomId={roomRecordId} />
-      <div className={`mt-6 grid gap-6 ${isOwner ? 'lg:grid-cols-2' : ''}`}>
-        <section id="participants" tabIndex={-1} aria-labelledby="participants-heading" className="rounded-2xl border border-border bg-card p-5 sm:p-6">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-primary"><UsersRound className="size-4" aria-hidden="true" /><span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">In this room</span></div>
-              <h2 id="participants-heading" className="text-lg font-semibold">Participants</h2>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_19rem] lg:gap-5">
+        <Suspense fallback={<section id="coding" role="status" className="grid min-h-80 place-items-center rounded-2xl border border-border bg-card text-sm text-muted-foreground">Loading code editor…</section>}>
+          <RoomCodeEditor roomId={roomRecordId} />
+        </Suspense>
+        <aside aria-label="Room access" className="min-w-0 space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-4">
+          <RoomCall key={roomRecordId} roomId={roomRecordId} nameFor={participantName} />
+          <section id="participants" tabIndex={-1} aria-labelledby="participants-heading" className="scroll-mt-4 rounded-2xl border border-border bg-card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="participants-heading" className="flex items-center gap-2 text-base font-semibold"><UsersRound className="size-4 text-primary" aria-hidden="true" /> Participants</h2>
+              <Badge variant="outline">{participantIds.length}</Badge>
             </div>
-            <Badge variant="outline">{participantIds.length}</Badge>
-          </div>
-          <ul className="mt-5 divide-y divide-border">
-            {participantIds.map((participantId) => (
-              <li key={participantId} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                <span className="min-w-0 break-words text-sm font-medium">{usersLoaded ? participantName(participantId) : participantId === userId ? 'You' : participantId === ownerId ? 'Room owner' : 'Collaborator'}</span>
-                <div className="flex items-center gap-2">
-                  <Badge variant={participantId === ownerId ? 'secondary' : 'outline'}>{participantId === ownerId ? 'Owner' : 'Collaborator'}</Badge>
-                  {isOwner && participantId !== ownerId && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      aria-label={`Remove ${participantName(participantId)}`}
-                      loading={removingId === participantId}
-                      disabled={inviting || Boolean(removingId) || membersStatus !== 'ready'}
-                      onClick={() => void removeParticipant(participantId)}
-                    >
-                      Remove
-                    </Button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-          {membersStatus === 'ready' && memberIds.length === 0 && <p className="mt-3 text-sm text-muted-foreground">No collaborators have joined this room.</p>}
-          {membersStatus === 'loading' && <p role="status" className="mt-4 text-sm text-muted-foreground">Loading active collaborators…</p>}
-          {membersStatus === 'error' && <p role="alert" className="mt-4 text-sm text-destructive">{membersError}</p>}
-          {removalError && <p role="alert" className="mt-4 text-sm text-destructive">{removalError}</p>}
-          {removalMessage && <p role="status" className="mt-4 text-sm text-primary">{removalMessage}</p>}
-        </section>
-
-        {isOwner ? (
-          <section aria-labelledby="invite-heading" className="rounded-2xl border border-border bg-card p-5 sm:p-6">
-            <div className="mb-2 flex items-center gap-2 text-primary"><MailPlus className="size-4" aria-hidden="true" /><span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Practice together</span></div>
-            <h2 id="invite-heading" className="text-lg font-semibold">Invite a collaborator</h2>
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">Add someone who already has a PairPrep account. They’ll see this room after signing in.</p>
-            <form onSubmit={invite} className="mt-5 space-y-3">
-              <label htmlFor="invite-email" className="sr-only">Collaborator email</label>
-              <Input id="invite-email" type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} required />
-              {inviteError && <p role="alert" className="text-sm text-destructive">{inviteError}</p>}
-              {inviteMessage && <p role="status" className="flex gap-2 text-sm text-primary"><Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" />{inviteMessage}</p>}
-              <Button type="submit" loading={inviting} disabled={Boolean(removingId)} className="w-full">Add collaborator</Button>
-            </form>
-            <p className="mt-4 border-t border-border pt-4 text-xs leading-5 text-muted-foreground">Adding a collaborator grants room access immediately. PairPrep will email the matched account with a link to this room.</p>
+            <ul className="mt-5 divide-y divide-border">
+              {participantIds.map((participantId) => (
+                <li key={participantId} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-secondary text-xs font-semibold text-primary" aria-hidden="true">
+                      {participantName(participantId).charAt(0).toUpperCase()}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="break-words text-sm font-medium">{usersLoaded ? participantName(participantId) : participantId === userId ? 'You' : participantId === ownerId ? 'Room owner' : 'Collaborator'}</p>
+                      <p className="text-xs text-muted-foreground">{participantId === ownerId ? 'Owner' : 'Collaborator'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isOwner && participantId !== ownerId && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Remove ${participantName(participantId)}`}
+                        loading={removingId === participantId}
+                        disabled={inviting || Boolean(removingId) || membersStatus !== 'ready'}
+                        onClick={() => void removeParticipant(participantId)}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {membersStatus === 'ready' && memberIds.length === 0 && <p className="mt-3 text-sm text-muted-foreground">No collaborators have joined this room.</p>}
+            {membersStatus === 'loading' && <p role="status" className="mt-4 text-sm text-muted-foreground">Loading active collaborators…</p>}
+            {membersStatus === 'error' && <p role="alert" className="mt-4 text-sm text-destructive">{membersError}</p>}
+            {removalError && <p role="alert" className="mt-4 text-sm text-destructive">{removalError}</p>}
+            {removalMessage && <p role="status" className="mt-4 text-sm text-primary">{removalMessage}</p>}
           </section>
-        ) : null}
-      </div>
 
-      <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
-        <InterviewCoach roomId={roomRecordId} userId={userId ?? ''} />
-        <TechnicalResearch roomId={roomRecordId} />
+          {isOwner ? (
+            <section aria-labelledby="invite-heading" className="rounded-2xl border border-border bg-card p-4">
+              <h2 id="invite-heading" className="flex items-center gap-2 text-base font-semibold"><MailPlus className="size-4 text-primary" aria-hidden="true" /> Invite a collaborator</h2>
+              <p className="mt-2 text-sm leading-5 text-muted-foreground">Enter the email of someone with a PairPrep account.</p>
+              <form onSubmit={invite} className="mt-5 space-y-3">
+                <label htmlFor="invite-email" className="sr-only">Collaborator email</label>
+                <Input id="invite-email" type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                {inviteError && <p role="alert" className="text-sm text-destructive">{inviteError}</p>}
+                {inviteMessage && <p role="status" className="flex gap-2 text-sm text-primary"><Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" />{inviteMessage}</p>}
+                <Button type="submit" loading={inviting} disabled={Boolean(removingId)} className="w-full">Add collaborator</Button>
+              </form>
+              <p className="mt-3 text-xs leading-5 text-muted-foreground">PairPrep grants room access and emails a link.</p>
+            </section>
+          ) : null}
+        </aside>
+        <div className="min-w-0 space-y-4 lg:col-start-1 lg:space-y-5">
+          <CollaborativeRoomNotes roomId={roomRecordId} />
+          <InterviewCoach roomId={roomRecordId} userId={userId ?? ''} />
+          <TechnicalResearch roomId={roomRecordId} />
+          <RoomReviews key={userId} roomId={roomRecordId} isOwner={isOwner} completedAt={room.data.completedAt} />
+        </div>
       </div>
-      <RoomReviews key={userId} roomId={roomRecordId} isOwner={isOwner} completedAt={room.data.completedAt} />
-    </main>
+    </div>
   )
 }

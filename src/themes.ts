@@ -20,7 +20,7 @@ export const THEMES = [
   {
     id: 'slate',
     label: 'Slate',
-    description: 'Neutral dark placeholder default. Replace with your own theme.',
+    description: 'A cool charcoal palette with a mint accent.',
   },
   {
     id: 'paper',

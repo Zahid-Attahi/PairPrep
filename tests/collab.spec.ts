@@ -377,6 +377,7 @@ test('an uninvited user cannot access a private interview room', async ({ users 
   await expect(bob.page.getByText('This room may not exist, or you may not have access to it.')).toBeVisible()
   await expect(bob.page.getByRole('heading', { name: roomName })).toHaveCount(0)
   await expect(bob.page.getByRole('heading', { name: 'Shared interview notes' })).toHaveCount(0)
+  await expect(bob.page.getByRole('region', { name: 'Collaborative code editor' })).toHaveCount(0)
   await expect(bob.page.getByRole('heading', { name: 'Participants' })).toHaveCount(0)
   await expect(bob.page.getByRole('heading', { name: 'AI interview coach' })).toHaveCount(0)
   await expect(bob.page.getByRole('heading', { name: 'Technical research' })).toHaveCount(0)
@@ -425,6 +426,173 @@ test('a non-owner cannot invite a participant to another user’s room', async (
   })
   await expect(bob.page.getByText(/Collaborator added|invitation email sent|room access granted/i)).toHaveCount(0)
   await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
+})
+
+test('two browsers exchange WebRTC media and keep coding while room access is enforced', async ({ users, request }) => {
+  test.setTimeout(55_000)
+  expect(await (await request.get('/api/integrations')).json()).toEqual({ mode: 'pairprep-local-mock' })
+  const [alice, bob] = await users(['Alice', 'Bob'])
+  for (const { page } of [alice, bob]) {
+    await page.addInitScript(() => {
+      const state = {
+        deny: false, captures: [] as MediaStreamConstraints[], tracks: [] as MediaStreamTrack[],
+        peers: [] as RTCPeerConnection[], sockets: [] as WebSocket[], sent: [] as string[],
+      }
+      Object.assign(window, { pairprepCallTest: state })
+      navigator.mediaDevices.getUserMedia = async (constraints) => {
+        state.captures.push(constraints ?? {})
+        if (state.deny) throw new DOMException('Test permission denial', 'NotAllowedError')
+        const stream = new MediaStream()
+        function add(track: MediaStreamTrack, dispose: () => void) {
+          const stop = track.stop.bind(track)
+          track.stop = () => {
+            if (track.readyState === 'ended') return
+            stop()
+            dispose()
+          }
+          stream.addTrack(track)
+          state.tracks.push(track)
+        }
+        if (constraints?.audio) {
+          const audio = new AudioContext()
+          const source = audio.createOscillator()
+          const output = audio.createMediaStreamDestination()
+          source.connect(output)
+          source.start()
+          void audio.resume()
+          add(output.stream.getAudioTracks()[0], () => { void audio.close() })
+        }
+        if (constraints?.video) {
+          const canvas = document.createElement('canvas')
+          canvas.width = 320
+          canvas.height = 180
+          const context = canvas.getContext('2d')!
+          let alternate = false
+          const draw = () => {
+            context.fillStyle = (alternate = !alternate) ? '#1a6652' : '#3152a1'
+            context.fillRect(0, 0, canvas.width, canvas.height)
+          }
+          draw()
+          const timer = setInterval(draw, 100)
+          add(canvas.captureStream(10).getVideoTracks()[0], () => clearInterval(timer))
+        }
+        return stream
+      }
+      const PeerConnection = RTCPeerConnection
+      window.RTCPeerConnection = class extends PeerConnection {
+        constructor(configuration?: RTCConfiguration) {
+          super(configuration)
+          state.peers.push(this)
+        }
+      }
+      const BrowserSocket = WebSocket
+      window.WebSocket = class extends BrowserSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols)
+          if (this.url.includes('/ws/call/')) state.sockets.push(this)
+        }
+        send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+          if (this.url.includes('/ws/call/') && typeof data === 'string' && data !== 'ping') {
+            state.sent.push(JSON.parse(data).type)
+          }
+          super.send(data)
+        }
+      }
+    })
+  }
+
+  await alice.page.goto('/home')
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await dialog.getByLabel('Room name').fill(`WebRTC room ${Date.now()}`)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/)
+  const roomUrl = alice.page.url()
+  const roomId = new URL(roomUrl).pathname.split('/').at(-1)
+  await bob.page.goto('/home')
+  await bob.page.getByRole('button', { name: 'Account menu' }).click()
+  await expect(bob.page.getByTestId('nav-user-email')).toHaveText(bob.email)
+
+  async function canOpenSocket(page: Page) {
+    return page.evaluate(async (room) => {
+      const { token } = await (await fetch('/api/auth/token', { method: 'POST' })).json()
+      return new Promise<boolean>((resolve) => {
+        const socket = new WebSocket(`ws://${location.host}/ws/call/${room}`, ['pairprep-call', token])
+        socket.onopen = () => { socket.close(); resolve(true) }
+        socket.onclose = () => resolve(false)
+      })
+    }, roomId)
+  }
+  expect(await canOpenSocket(bob.page)).toBe(false)
+
+  await alice.page.getByLabel('Collaborator email').fill(bob.email)
+  await alice.page.getByRole('button', { name: 'Add collaborator', exact: true }).click()
+  await expect(alice.page.getByText(/Collaborator added and invitation email sent/)).toBeVisible()
+  await bob.page.goto(roomUrl)
+
+  const call = (page: Page) => page.getByRole('region', { name: 'Room call' })
+  const media = (page: Page) => page.evaluate(() => (window as any).pairprepCallTest.captures.length)
+  expect(await media(alice.page)).toBe(0)
+  expect(await media(bob.page)).toBe(0)
+  await bob.page.evaluate(() => { (window as any).pairprepCallTest.deny = true })
+  await call(bob.page).getByRole('button', { name: 'Join Call', exact: true }).click()
+  await expect(call(bob.page).getByRole('alert')).toContainText('Device permission denied')
+  await bob.page.evaluate(() => { (window as any).pairprepCallTest.deny = false })
+
+  await call(alice.page).getByRole('button', { name: 'Join Call', exact: true }).click()
+  await expect(call(alice.page).getByText('Waiting for another participant…')).toBeVisible()
+  await call(bob.page).getByRole('button', { name: 'Join audio only' }).click()
+  for (const { page } of [alice, bob]) {
+    await expect(call(page).getByText('Peer-to-peer call connected.')).toBeVisible({ timeout: 15_000 })
+  }
+  const sent = (await Promise.all([alice, bob].map(({ page }) =>
+    page.evaluate(() => (window as any).pairprepCallTest.sent as string[])))).flat()
+  expect(sent).toEqual(expect.arrayContaining(['offer', 'answer', 'ice']))
+  const inbound = (page: Page, kind: string) => page.evaluate(async (kind) => {
+    const peer = (window as any).pairprepCallTest.peers.at(-1) as RTCPeerConnection
+    const stats = await peer.getStats()
+    return [...stats.values()].some((row) => row.type === 'inbound-rtp' && row.kind === kind && row.bytesReceived > 0)
+  }, kind)
+  await expect.poll(() => inbound(bob.page, 'video')).toBe(true)
+  await expect.poll(() => inbound(alice.page, 'audio')).toBe(true)
+  await expect(call(bob.page).locator('video[aria-label="You video"]')).toHaveClass(/opacity-0/)
+  await call(bob.page).getByRole('button', { name: 'Turn camera on' }).click()
+  await expect.poll(() => inbound(alice.page, 'video')).toBe(true)
+  await call(bob.page).getByRole('button', { name: 'Turn camera off' }).click()
+  await expect(call(alice.page).locator('video[aria-label="Bob video"]')).toHaveClass(/opacity-0/)
+  await call(bob.page).getByRole('button', { name: 'Mute microphone' }).click()
+  expect(await bob.page.evaluate(() => (window as any).pairprepCallTest.tracks.find((track: MediaStreamTrack) => track.kind === 'audio').enabled)).toBe(false)
+  await call(bob.page).getByRole('button', { name: 'Unmute microphone' }).click()
+
+  const editor = (page: Page) => page.getByRole('region', { name: 'Collaborative code editor' })
+  for (const { page } of [alice, bob]) {
+    await editor(page).scrollIntoViewIfNeeded()
+    await expect(editor(page).getByRole('combobox', { name: 'Language' })).toBeEnabled()
+    await expect(editor(page).locator('.line-numbers').first()).toHaveText('1')
+  }
+  await editor(alice.page).locator('textarea.inputarea').focus()
+  await alice.page.keyboard.insertText('const codingDuringCall = true')
+  await expect(editor(bob.page).locator('.view-lines')).toContainText('codingDuringCall')
+
+  await bob.page.evaluate(() => (window as any).pairprepCallTest.sockets.at(-1).close())
+  await expect(call(bob.page).getByText(/Connection interrupted/)).toBeVisible()
+  await expect(call(bob.page).getByText('Peer-to-peer call connected.')).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => inbound(bob.page, 'video')).toBe(true)
+
+  await call(bob.page).getByRole('button', { name: 'Leave Call' }).click()
+  await expect(call(alice.page).getByText('Waiting for another participant…')).toBeVisible()
+  expect(await bob.page.evaluate(() => (window as any).pairprepCallTest.tracks.every((track: MediaStreamTrack) => track.readyState === 'ended'))).toBe(true)
+  await call(bob.page).getByRole('button', { name: 'Join audio only' }).click()
+  await expect(call(alice.page).getByText('Peer-to-peer call connected.')).toBeVisible({ timeout: 15_000 })
+
+  await alice.page.getByRole('button', { name: /^Remove / }).click()
+  await expect(call(alice.page).getByText('Waiting for another participant…')).toBeVisible()
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  expect(await bob.page.evaluate(() => (window as any).pairprepCallTest.tracks.every((track: MediaStreamTrack) => track.readyState === 'ended'))).toBe(true)
+  expect(await canOpenSocket(bob.page)).toBe(false)
+  await call(alice.page).getByRole('button', { name: 'Leave Call' }).click()
 })
 
 test('completed interview history and self-reviews survive reload and stay private', async ({ users }) => {
@@ -543,6 +711,261 @@ test('invited participants can collaborate until the owner revokes their access'
   await expect(bobNotes).toHaveCount(0)
   await bob.page.reload()
   await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
+})
+
+test('the collaborative editor merges concurrent edits, persists language, and revokes access', async ({ users, request }) => {
+  expect(await (await request.get('/api/integrations')).json()).toEqual({ mode: 'pairprep-local-mock' })
+  const [alice, bob] = await users(['Alice', 'Bob'])
+  const roomName = `Collaborative code ${Date.now()}`
+
+  await alice.page.goto('/home')
+  await alice.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = alice.page.getByRole('dialog', { name: 'Create an interview room' })
+  await dialog.getByLabel('Room name').fill(roomName)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await alice.page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+  await expect(alice.page).toHaveURL(/\/rooms\/[^/]+$/)
+  const roomUrl = alice.page.url()
+  const roomId = new URL(roomUrl).pathname.split('/').at(-1)
+
+  await bob.page.goto('/home')
+  await bob.page.getByRole('button', { name: 'Account menu' }).click()
+  await expect(bob.page.getByTestId('nav-user-email')).toHaveText(bob.email)
+  await alice.page.getByLabel('Collaborator email').fill(bob.email)
+  await alice.page.getByRole('button', { name: 'Add collaborator', exact: true }).click()
+  await expect(alice.page.getByText(/Collaborator added and invitation email sent/)).toBeVisible()
+
+  // Hold both browsers' outgoing document updates until they have edited the
+  // same initial state. The server and the rest of the WebSocket are real.
+  const codeKey = Buffer.from(`interviewRooms:${roomId}:code`)
+  const pending: Array<() => void> = []
+  let hold = false
+  for (const { page } of [alice, bob]) {
+    await page.routeWebSocket('**/ws/**', (socket) => {
+      const server = socket.connectToServer()
+      socket.onMessage((message) => {
+        if (hold && Buffer.isBuffer(message) && message.includes(codeKey)) {
+          pending.push(() => server.send(message))
+        } else {
+          server.send(message)
+        }
+      })
+    })
+  }
+
+  await alice.page.route('**/src/components/RoomCodeEditor.tsx*', async (route) => {
+    // Hold the lazy editor module until its loading state has been observed.
+    await expect(alice.page.getByText('Loading code editor…', { exact: true })).toBeVisible()
+    await route.continue()
+  })
+  await Promise.all([alice.page.reload(), bob.page.goto(roomUrl)])
+
+  const editor = (page: Page) => page.getByRole('region', { name: 'Collaborative code editor' })
+  const language = (page: Page) => editor(page).getByRole('combobox', { name: 'Language' })
+  const code = (page: Page) => editor(page).locator('.view-lines')
+  // Monaco recycles rendered lines. Read them in visual order, not DOM order.
+  const visibleCode = (page: Page) => code(page).locator('.view-line').evaluateAll((lines) =>
+    lines.map((line) => ({ top: (line as HTMLElement).offsetTop, text: line.textContent }))
+      .sort((left, right) => left.top - right.top)
+      .map(({ text }) => text).join('\n'))
+  async function typeInEditor(page: Page, value: string) {
+    await editor(page).locator('textarea.inputarea').focus()
+    await page.keyboard.insertText(value)
+  }
+  for (const { page } of [alice, bob]) {
+    await expect(language(page)).toBeEnabled({ timeout: 15_000 })
+    await expect(language(page)).toHaveValue('javascript')
+    await expect(editor(page).locator('.line-numbers').first()).toHaveText('1')
+    await expect(editor(page).getByRole('button', { name: 'Run Code' })).toBeEnabled()
+  }
+  await typeInEditor(alice.page, 'const answer = 42')
+  await expect(code(bob.page).getByText('const', { exact: true })).toHaveCSS('color', 'rgb(203, 179, 255)')
+  await language(alice.page).selectOption('python')
+  await expect(language(bob.page)).toHaveValue('python')
+  await editor(alice.page).locator('textarea.inputarea').focus()
+  await alice.page.keyboard.press('ControlOrMeta+a')
+  await alice.page.keyboard.insertText('def calculate():')
+  await alice.page.keyboard.press('Enter')
+  await alice.page.keyboard.insertText('return 42')
+  await expect(code(bob.page)).toContainText('return')
+  await expect.poll(() => visibleCode(bob.page)).toMatch(/\n\u00a0{4}return/)
+  const syntax = code(bob.page).getByText('def', { exact: true })
+  await expect(syntax).toHaveCSS('color', 'rgb(203, 179, 255)')
+  await editor(bob.page).locator('textarea.inputarea').focus()
+  await bob.page.keyboard.press('ControlOrMeta+a')
+  await expect(editor(alice.page).locator('.yRemoteSelection').first()).toBeVisible()
+  await bob.page.keyboard.press('ArrowRight')
+
+  hold = true
+  await Promise.all([
+    typeInEditor(alice.page, '\n# Alice edit\n'),
+    typeInEditor(bob.page, '\n# Bob edit\n'),
+  ])
+  await expect(code(alice.page)).toContainText('Alice edit')
+  await expect(code(bob.page)).toContainText('Bob edit')
+  await expect(code(alice.page)).not.toContainText('Bob edit')
+  await expect(code(bob.page)).not.toContainText('Alice edit')
+  expect(pending.length).toBeGreaterThanOrEqual(2)
+  hold = false
+  pending.splice(0).forEach((send) => send())
+  for (const { page } of [alice, bob]) {
+    await expect(code(page)).toContainText('Alice edit')
+    await expect(code(page)).toContainText('Bob edit')
+  }
+  await expect.poll(async () => {
+    const [aliceCode, bobCode] = await Promise.all([visibleCode(alice.page), visibleCode(bob.page)])
+    return aliceCode === bobCode
+  }).toBe(true)
+  await alice.page.keyboard.press('ControlOrMeta+z')
+  await expect(code(bob.page)).not.toContainText('Alice edit')
+  await expect(code(bob.page)).toContainText('Bob edit')
+  await alice.page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(code(bob.page)).toContainText('Alice edit')
+
+  await language(bob.page).selectOption('java')
+  await expect(language(alice.page)).toHaveValue('java')
+  await expect(code(alice.page)).toContainText('return')
+  await editor(bob.page).locator('textarea.inputarea').focus()
+  await bob.page.keyboard.press('ControlOrMeta+End')
+  await bob.page.keyboard.insertText('\nclass Practice {}')
+  await expect(code(alice.page).getByText('class', { exact: true })).toHaveCSS('color', 'rgb(203, 179, 255)')
+  await bob.page.setViewportSize({ width: 390, height: 844 })
+  await bob.page.reload()
+  await expect(language(bob.page)).toHaveValue('java')
+  await expect(code(bob.page)).toContainText('Alice edit')
+  await expect(code(bob.page)).toContainText('Bob edit')
+  expect(await bob.page.locator('main').first().evaluate((main) => main.scrollWidth)).toBe(390)
+  await expect(bob.page.getByRole('textbox', { name: 'Shared interview notes' })).toHaveValue('')
+
+  await expect(editor(alice.page).getByText(/Java is available for editing/)).toBeVisible()
+  await expect(editor(alice.page).getByRole('button', { name: 'Run Code' })).toBeDisabled()
+  await language(alice.page).selectOption('javascript')
+  await editor(alice.page).locator('textarea.inputarea').focus()
+  await alice.page.keyboard.press('ControlOrMeta+a')
+  await alice.page.keyboard.insertText('console.log("Private execution result")')
+  await editor(alice.page).getByRole('button', { name: 'Run Code' }).click()
+  await expect(editor(alice.page).getByRole('region', { name: 'Execution output' }).getByText('Private execution result', { exact: true })).toBeVisible()
+  await expect(editor(bob.page).getByRole('region', { name: 'Execution output' }).getByText('Private execution result', { exact: true })).toHaveCount(0)
+
+  await alice.page.getByRole('button', { name: /^Remove / }).click()
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  await expect(editor(bob.page)).toHaveCount(0)
+  await bob.page.reload()
+  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
+  const denied = await bob.page.evaluate(async (roomId) => {
+    const { callServerAction } = await import('/src/lib/server-actions.ts')
+    try {
+      await callServerAction('rooms.code.run', { roomId, language: 'java', source: 'class Practice {}' })
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  }, roomId)
+  expect(denied).toBe('Room not found, or you do not have access.')
+})
+
+test('runs real browser Python and JavaScript inside the isolated runner', async ({ users }) => {
+  const [owner] = await users(1)
+  const { page } = owner
+  await page.goto('/home')
+  await page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create an interview room' })
+  await dialog.getByLabel('Room name').fill(`Browser runner ${Date.now()}`)
+  await dialog.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await page.getByRole('option', { name: /Two Sum/ }).click()
+  await dialog.getByRole('button', { name: 'Create room', exact: true }).click()
+
+  const editor = page.getByRole('region', { name: 'Collaborative code editor' })
+  const output = editor.getByRole('region', { name: 'Execution output' })
+  const run = editor.getByRole('button', { name: 'Run Code', exact: true })
+  const language = editor.getByRole('combobox', { name: 'Language' })
+  async function write(source: string) {
+    await editor.locator('textarea.inputarea').focus()
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.keyboard.insertText(source)
+  }
+
+  await expect(run).toBeEnabled({ timeout: 15_000 })
+  await write('console.log("Hello PairPrep"); console.log(typeof fetch, typeof document, typeof localStorage);')
+  await run.click()
+  await expect(output.getByText(/Hello PairPrep/)).toBeVisible()
+  await expect(output.getByText(/undefined undefined undefined/)).toBeVisible()
+  await expect(output.getByText(/Completed.*ms/)).toBeVisible()
+  await write('const =')
+  await output.getByRole('button', { name: 'Run Again' }).click()
+  await expect(output.getByText(/Compilation error/)).toBeVisible()
+  await write('throw new Error("JavaScript failure")')
+  await run.click()
+  await expect(output.getByText(/Runtime error/)).toBeVisible()
+  await expect(output.getByText(/JavaScript failure/)).toBeVisible()
+  await editor.getByLabel('Standard input (optional)').fill('JavaScript stdin')
+  await write('console.log(readLine()); console.log("x".repeat(9000));')
+  await run.click()
+  await expect(output.locator('pre').filter({ hasText: 'JavaScript stdin' })).toBeVisible()
+  await expect(output.getByText('Output was truncated.')).toBeVisible()
+  await write('while (true) {}')
+  await run.click()
+  await expect(output.getByText(/Execution timed out/)).toBeVisible()
+
+  await language.selectOption('python')
+  await write('print("Python ready")')
+  await run.click()
+  await expect(output.getByText('Python ready', { exact: true })).toBeVisible()
+  await editor.getByLabel('Standard input (optional)').fill('Ada')
+  await write('print("Hello PairPrep")\nprint(input())')
+  await run.click()
+  await expect(output.getByText(/Hello PairPrep/)).toBeVisible()
+  await expect(output.locator('pre').filter({ hasText: 'Ada' })).toBeVisible()
+  await write('import js, sys\nsys.modules.pop("js", None)\nimport js\nprint(hasattr(js, "fetch"), hasattr(js, "globalThis"))')
+  await run.click()
+  await expect(output.getByText('False False', { exact: true })).toBeVisible()
+  await write('def :')
+  await run.click()
+  await expect(output.getByText(/Compilation error/)).toBeVisible()
+  await write('raise ValueError("Python failure")')
+  await run.click()
+  await expect(output.getByText(/Runtime error/)).toBeVisible()
+  await expect(output.getByText(/Python failure/)).toBeVisible()
+  await page.evaluate(() => { document.cookie = 'pairprep_runner_probe=app-only; Path=/; SameSite=Lax' })
+  expect(await page.evaluate(() => document.cookie.includes('pairprep_runner_probe=app-only'))).toBe(true)
+  await write('while True: pass')
+  await run.click()
+  const sandbox = page.frameLocator('iframe[title="Isolated code runner"]').locator('body')
+  const isolation = await sandbox.evaluate(async (_body, url) => {
+    const blocked = (read: () => unknown) => {
+      try { read(); return false } catch { return true }
+    }
+    const workerScript = URL.createObjectURL(new Blob([
+      `fetch(${JSON.stringify(url)}, { credentials: 'include' }).then(() => postMessage(false), () => postMessage(true));`,
+    ], { type: 'text/javascript' }))
+    const worker = new Worker(workerScript)
+    const workerNetworkBlocked = await new Promise((resolve) => {
+      worker.onmessage = (event) => resolve(event.data)
+      worker.onerror = () => resolve(false)
+    })
+    worker.terminate()
+    URL.revokeObjectURL(workerScript)
+    let cookiesBlocked = true
+    try { cookiesBlocked = document.cookie === '' } catch { /* Opaque origins may throw instead. */ }
+    return {
+      origin: self.origin,
+      workerNetworkBlocked,
+      cookiesBlocked,
+      parentBlocked: blocked(() => window.parent.document),
+      storageBlocked: blocked(() => localStorage.length),
+    }
+  }, new URL('/api/auth/ok', page.url()).href)
+  expect(isolation).toEqual({
+    origin: 'null', workerNetworkBlocked: true, cookiesBlocked: true, parentBlocked: true, storageBlocked: true,
+  })
+  await expect(output.getByText(/Execution timed out/)).toBeVisible()
+  await run.click()
+  await output.getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(output.getByText('Execution stopped.')).toBeVisible()
+  await expect(page.locator('iframe[title="Isolated code runner"]')).toHaveCount(0)
+  await write('print("Fresh run")')
+  await run.click()
+  await expect(output.getByText('Fresh run', { exact: true })).toBeVisible()
 })
 
 test('AI Coach displays a successful mocked response', async ({ users }) => {

@@ -11,6 +11,9 @@ import type { Context, Hono } from 'hono'
 import { authenticatedRoomRequest, resolveAppRole, verifyJwt } from 'deepspace/worker'
 import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
 import type { AppContext, Env } from '../../worker.js'
+import { getRoomAccess } from '../actions/index.js'
+import { callProtocol } from '../lib/call-signaling.js'
+import { createActionTools } from './action-routes.js'
 
 function jwtConfig(env: Env): JwtVerifierConfig {
   return { publicKey: env.AUTH_JWT_PUBLIC_KEY, issuer: env.AUTH_JWT_ISSUER }
@@ -119,6 +122,30 @@ async function resolveDocsYjsRole(
 }
 
 export function registerRealtimeRoutes(app: Hono<AppContext>): void {
+  app.get('/ws/call/:roomId', async (c) => {
+    const protocols = c.req.header('Sec-WebSocket-Protocol')?.split(',').map((value) => value.trim())
+    const token = protocols?.[0] === callProtocol && protocols.length === 2 ? protocols[1] : null
+    const auth = token ? (await verifyJwt(jwtConfig(c.env), token)).result : null
+    if (!auth || !token) return new Response('Unauthorized', { status: 401 })
+    if (c.req.header('Origin') !== new URL(c.req.url).origin) return new Response('Forbidden', { status: 403 })
+    if (c.req.header('Upgrade')?.toLowerCase() !== 'websocket') return new Response('WebSocket required', { status: 426 })
+
+    const roomId = c.req.param('roomId')
+    if (!roomId || roomId.length > 128) return new Response('Forbidden', { status: 403 })
+    const tools = createActionTools(c.env, auth.userId, token)
+    if (!await getRoomAccess(tools, roomId, auth.userId)) return new Response('Forbidden', { status: 403 })
+    const namespace = c.env.CALL_ROOMS
+    const stub = namespace.get(namespace.idFromName(`call:${roomId}`))
+    // Read generation before asking the records object for current membership.
+    // An intervening revoke invalidates this handshake at the call object.
+    const generation = await (await stub.fetch('https://internal/generation')).json<number>()
+    const room = await getRoomAccess(tools, roomId, auth.userId)
+    if (!room) return new Response('Forbidden', { status: 403 })
+    return stub.fetch('https://internal/join', {
+      headers: { Upgrade: 'websocket', 'X-Call-User': auth.userId, 'X-Call-Generation': String(generation) },
+    })
+  })
+
   app.get(
     '/ws/:roomId',
     wsRoute((env) => env.RECORD_ROOMS),

@@ -1,9 +1,11 @@
 import { useState, type FormEvent, type RefObject } from 'react'
+import { Code2 } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select'
-import { codingChallenges } from '@/challenges'
+import { codingChallenges, getChallenge } from '@/challenges'
 import { callServerAction } from '@/lib/server-actions'
 
 interface CreateRoomDialogProps {
@@ -18,6 +20,7 @@ export default function CreateRoomDialog({ open, finalFocus, onClose, onCreated 
   const [challengeId, setChallengeId] = useState('')
   const [createError, setCreateError] = useState('')
   const [creating, setCreating] = useState(false)
+  const challenge = getChallenge(challengeId)
 
   async function createRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -47,8 +50,9 @@ export default function CreateRoomDialog({ open, finalFocus, onClose, onCreated 
   return (
     <Modal open={open} finalFocus={finalFocus} onClose={closeCreate}>
       <Modal.Header>
+        <span className="mb-3 grid size-10 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary"><Code2 className="size-5" aria-hidden="true" /></span>
         <Modal.Title>Create an interview room</Modal.Title>
-        <Modal.Description>Choose a challenge to start a focused practice session.</Modal.Description>
+        <Modal.Description>Name your private room and pick a coding challenge.</Modal.Description>
       </Modal.Header>
       <form onSubmit={createRoom}>
         <Modal.Body className="space-y-5">
@@ -67,7 +71,13 @@ export default function CreateRoomDialog({ open, finalFocus, onClose, onCreated 
               </SelectContent>
             </Select>
           </div>
-          {createError && <p role="alert" className="text-sm text-destructive">{createError}</p>}
+          {challenge && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm">
+              <span className="text-muted-foreground">{challenge.topic}</span>
+              <Badge variant="outline">{challenge.difficulty}</Badge>
+            </div>
+          )}
+          {createError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{createError}</p>}
         </Modal.Body>
         <Modal.Footer>
           <Button variant="ghost" onClick={closeCreate} disabled={creating}>Cancel</Button>

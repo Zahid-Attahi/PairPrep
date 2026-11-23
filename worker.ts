@@ -26,6 +26,8 @@ import { tasks as cronTasks, runTask as runCronTask } from './src/cron.js'
 import { runJob } from './src/jobs.js'
 import { schemas } from './src/schemas.js'
 import { registerActionRoutes } from './src/server/action-routes.js'
+import { codeRunRatePath } from './src/server/code-run.js'
+import { reserveCodeRunSlot } from './src/server/code-run-limits.js'
 import {
   registerAuthAndIntegrationRoutes,
   registerPlatformProxyRoutes,
@@ -33,6 +35,7 @@ import {
   resolveAuth,
 } from './src/server/http-routes.js'
 import { registerRealtimeRoutes } from './src/server/realtime-routes.js'
+export { AppCallRoom } from './src/server/call-room.js'
 
 // Dynamic deploy reads this manifest to create the app's DO bindings.
 export const __DO_MANIFEST__ = [
@@ -42,11 +45,45 @@ export const __DO_MANIFEST__ = [
   { binding: 'PRESENCE_ROOMS', className: 'AppPresenceRoom', sqlite: true },
   { binding: 'CRON_ROOMS', className: 'AppCronRoom', sqlite: true },
   { binding: 'JOB_ROOMS', className: 'AppJobRoom', sqlite: true },
+  { binding: 'CALL_ROOMS', className: 'AppCallRoom', sqlite: true },
 ] as const satisfies DOManifest
 
 export class AppRecordRoom extends RecordRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, schemas, { ownerUserId: env.OWNER_USER_ID })
+  }
+
+  protected override async handleInternalRequest(request: Request, url: URL): Promise<Response | null> {
+    if (url.pathname === codeRunRatePath) {
+      const userId = request.headers.get('X-User-Id')
+      if (request.method !== 'POST' || request.headers.get('X-App-Action') !== 'true' || !userId) {
+        return new Response('Not found', { status: 404 })
+      }
+      return new Response(null, { status: reserveCodeRunSlot(this.state.storage, userId) ? 204 : 429 })
+    }
+    if (url.pathname !== '/internal/revoke-room-member') return super.handleInternalRequest(request, url)
+    if (request.method !== 'POST' || request.headers.get('X-App-Action') !== 'true') {
+      return new Response('Not found', { status: 404 })
+    }
+
+    // RecordRoom 0.44.2 checks access on Yjs joins and writes, but broadcasts
+    // to already-joined sockets. Close those sockets before processing another
+    // message after a membership deletion.
+    return this.state.blockConcurrencyWhile(async () => {
+      const roomId = request.headers.get('X-Call-Room')
+      const body = await request.clone().json<{ params: { where: { userId: string } } }>()
+      if (roomId) {
+        const calls = (this.env as Env).CALL_ROOMS
+        const callRoom = calls.get(calls.idFromName(`call:${roomId}`))
+        const revoked = await callRoom.fetch('https://internal/revoke', {
+          method: 'POST', headers: { 'X-Call-User': body.params.where.userId },
+        }).catch(() => null)
+        if (!revoked?.ok) return Response.json({ success: false, error: 'Call revocation failed.' }, { status: 503 })
+      }
+      const response = await super.fetch(new Request(new URL('/api/tools/execute', url), request))
+      if (response.ok) this.disconnectAllSockets()
+      return response
+    })
   }
 }
 

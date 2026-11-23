@@ -30,14 +30,17 @@
 import type { Hono } from 'hono'
 import {
   apiWorkerFetch,
+  BodyTooLargeError,
   lookupOwn,
   normalizeApiError,
+  readBoundedBodyText,
   splitIntegrationEndpoint,
 } from 'deepspace/worker'
 import type { ActionResult, ActionTools, VerifyResult } from 'deepspace/worker'
 import { actions } from '../actions/index.js'
 import { integrations } from '../integrations.js'
 import type { AppContext, Env } from '../../worker.js'
+import { codeRunBodyLimit } from './code-run.js'
 
 type ResolveAuth = (req: Request, env: Env) => Promise<VerifyResult | null>
 
@@ -62,23 +65,37 @@ export function registerActionRoutes(app: Hono<AppContext>, resolveAuth: Resolve
     // returns the handler argument, env secrets included, as the response.
     const action = lookupOwn(actions, name)
     if (!action) return c.json({ error: 'Action not found' }, 404)
+    const codeRunAction = name === 'rooms.code.run' || name === 'rooms.code.status'
+    if (codeRunAction) c.header('Cache-Control', 'no-store')
     let parsedParams: unknown
     try {
-      parsedParams = await c.req.json<unknown>()
-    } catch {
+      parsedParams = codeRunAction
+        ? JSON.parse(await readBoundedBodyText(c.req.raw, name === 'rooms.code.run' ? codeRunBodyLimit : 1024))
+        : await c.req.json<unknown>()
+    } catch (error) {
+      if (codeRunAction && error instanceof BodyTooLargeError) {
+        return c.json({ error: 'Code or standard input is too large.' }, 413)
+      }
       return c.json({ error: 'Request body must be valid JSON.' }, 400)
     }
     if (!parsedParams || typeof parsedParams !== 'object' || Array.isArray(parsedParams)) {
       return c.json({ error: 'Request body must be a JSON object.' }, 400)
     }
     const params = parsedParams as Record<string, unknown>
-    const tools = createActionTools(c.env, auth.userId, callerJwt)
+    const tools = createActionTools(c.env, auth.userId, callerJwt, name === 'rooms.members.remove' && typeof params.roomId === 'string' ? params.roomId.trim() : undefined)
     const result = await action({ userId: auth.userId, params, tools, env: c.env, callerJwt })
+    if (codeRunAction && !result.success) {
+      const status = result.code === 'forbidden' ? 403
+        : result.code === 'rate_limited' ? 429
+          : result.code === 'unavailable' ? 503
+            : result.code === 'runner_timeout' ? 504 : 400
+      return c.json(result, status)
+    }
     return c.json(result as unknown as Record<string, unknown>)
   })
 }
 
-function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
+export function createActionTools(env: Env, userId: string, callerJwt: string, revokeRoomId?: string): ActionTools {
   const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
 
   // The DO returns ActionResult<unknown>; callers below supply the precise
@@ -87,13 +104,17 @@ function createActionTools(env: Env, userId: string, callerJwt: string): ActionT
     tool: string,
     params: Record<string, unknown>,
   ): Promise<ActionResult<TData>> {
+    const path = tool === 'records.deleteWhere' && params.collection === 'team_members'
+      ? '/internal/revoke-room-member'
+      : '/api/tools/execute'
     const res = await stub.fetch(
-      new Request('https://internal/api/tools/execute', {
+      new Request(`https://internal${path}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-User-Id': userId,
           'X-App-Action': 'true',
+          ...(path === '/internal/revoke-room-member' && revokeRoomId ? { 'X-Call-Room': revokeRoomId } : {}),
         },
         body: JSON.stringify({ tool, params }),
       }),

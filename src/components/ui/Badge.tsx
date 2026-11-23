@@ -9,7 +9,7 @@ const VARIANTS: Record<Variant, string> = {
   secondary: 'bg-secondary text-secondary-foreground',
   destructive: 'bg-destructive text-destructive-foreground',
   outline: 'border border-border text-foreground',
-  success: 'bg-success text-success-foreground',
+  success: 'border border-success/25 bg-success/10 text-success',
   warning: 'bg-warning text-warning-foreground',
   info: 'bg-info text-info-foreground',
 }
@@ -29,7 +29,7 @@ export function Badge({ className, variant = 'default', size = 'default', ...pro
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full font-medium',
+        'inline-flex items-center rounded-md font-medium',
         VARIANTS[variant],
         SIZES[size],
         className,
