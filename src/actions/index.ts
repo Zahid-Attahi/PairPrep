@@ -5,6 +5,7 @@ import { getChallenge, isChallengeId } from '../challenges'
 import { APP_NAME } from '../constants'
 import { seo } from '../seo'
 import { createCodeRunActions } from '../server/code-run'
+import { deleteRoomPath } from '../server/room-deletion'
 
 interface InterviewRoomData extends Record<string, unknown> {
   name: string
@@ -130,6 +131,28 @@ export const actions: Record<string, ActionHandler<Env>> = {
       { name, ownerId: userId, teamId: roomId, challengeId: params.challengeId },
       roomId,
     )
+  },
+
+  'rooms.delete': async ({ params, userId, env }) => {
+    const roomId = typeof params.roomId === 'string' ? params.roomId.trim() : ''
+    if (!roomId || roomId.length > 128) {
+      return { ...failure('A valid room is required.'), code: 'invalid_room' }
+    }
+    try {
+      const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
+      const response = await stub.fetch(`https://internal${deleteRoomPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true', 'X-User-Id': userId },
+        body: JSON.stringify({ roomId }),
+      })
+      if (response.status === 204) return { success: true, data: { deleted: true } }
+      if (response.status === 403) {
+        return { ...failure('Only the room owner can delete this room.'), code: 'forbidden' }
+      }
+    } catch (error) {
+      console.error('Could not reach the room records for deletion', error)
+    }
+    return { ...failure('Could not delete the room. Try again.'), code: 'unavailable' }
   },
 
   'rooms.invite': async ({ params, tools, userId, env }) => {

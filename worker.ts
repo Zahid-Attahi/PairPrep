@@ -28,6 +28,7 @@ import { schemas } from './src/schemas.js'
 import { registerActionRoutes } from './src/server/action-routes.js'
 import { codeRunRatePath } from './src/server/code-run.js'
 import { reserveCodeRunSlot } from './src/server/code-run-limits.js'
+import { createRoomChildPath, deleteRoomData, deleteRoomPath, roomChildScope } from './src/server/room-deletion.js'
 import {
   registerAuthAndIntegrationRoutes,
   registerPlatformProxyRoutes,
@@ -61,6 +62,22 @@ export class AppRecordRoom extends RecordRoom<Env> {
       }
       return new Response(null, { status: reserveCodeRunSlot(this.state.storage, userId) ? 204 : 429 })
     }
+    if (url.pathname === deleteRoomPath || url.pathname === createRoomChildPath) {
+      const userId = request.headers.get('X-User-Id')
+      if (request.method !== 'POST' || request.headers.get('X-App-Action') !== 'true' || !userId) {
+        return new Response('Not found', { status: 404 })
+      }
+      return this.state.blockConcurrencyWhile(async () => {
+        try {
+          return url.pathname === deleteRoomPath
+            ? await this.deleteInterviewRoom(request, userId)
+            : await this.createRoomChild(request, userId)
+        } catch (error) {
+          console.error('Room data operation failed', error)
+          return Response.json({ success: false }, { status: 503 })
+        }
+      })
+    }
     if (url.pathname !== '/internal/revoke-room-member') return super.handleInternalRequest(request, url)
     if (request.method !== 'POST' || request.headers.get('X-App-Action') !== 'true') {
       return new Response('Not found', { status: 404 })
@@ -84,6 +101,57 @@ export class AppRecordRoom extends RecordRoom<Env> {
       if (response.ok) this.disconnectAllSockets()
       return response
     })
+  }
+
+  override async webSocketMessage(socket: WebSocket, message: ArrayBuffer | string) {
+    // Ignore frames queued on a socket that has already been revoked.
+    if (socket.readyState === WebSocket.OPEN) await super.webSocketMessage(socket, message)
+  }
+
+  private recordTool(userId: string, tool: string, params: Record<string, unknown>) {
+    return super.fetch(new Request('https://internal/api/tools/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId, 'X-App-Action': 'true' },
+      body: JSON.stringify({ tool, params }),
+    }))
+  }
+
+  private async deleteInterviewRoom(request: Request, userId: string) {
+    const { roomId } = await request.json<{ roomId: string }>()
+    const response = await this.recordTool(userId, 'records.get', { collection: 'interviewRooms', recordId: roomId })
+    const room = await response.json<{ data?: { record: { data: { ownerId: string; teamId: string } } } }>()
+    const data = room.data?.record.data
+    if (response.status === 404 || (data && data.ownerId !== userId)) return new Response(null, { status: 403 })
+    if (!response.ok || !data?.teamId) return new Response(null, { status: 503 })
+
+    // The records barrier also holds access checks for joins that read the
+    // call generation after this close. Joins with the old generation fail.
+    const calls = (this.env as Env).CALL_ROOMS
+    const callRoom = calls.get(calls.idFromName(`call:${roomId}`))
+    const closed = await callRoom.fetch('https://internal/close-room', { method: 'POST' })
+    if (!closed.ok) return new Response(null, { status: 503 })
+
+    deleteRoomData(this.state.storage, roomId, data.teamId)
+    this.disconnectAllSockets()
+    return new Response(null, { status: 204 })
+  }
+
+  private async createRoomChild(request: Request, userId: string) {
+    const { params } = await request.json<{ params: { collection: string; data: Record<string, unknown>; recordId?: string } }>()
+    const scope = roomChildScope(params.collection, params.data)
+    if (!scope || typeof (scope.teamId ?? scope.recordId) !== 'string') {
+      return Response.json({ success: false, error: 'A valid room is required.' }, { status: 400 })
+    }
+
+    // An in-flight invite, review, or AI reply must not recreate data after a
+    // cascade. Share the deletion barrier between the lookup and insert.
+    const response = await this.recordTool(userId, 'records.query', { collection: 'interviewRooms', where: scope, limit: 1 })
+    const rooms = await response.json<{ data?: { records: unknown[] } }>()
+    if (!response.ok || !rooms.data) return Response.json({ success: false }, { status: 503 })
+    if (rooms.data.records.length === 0) {
+      return Response.json({ success: false, error: 'Room not found, or you do not have access.' }, { status: 404 })
+    }
+    return this.recordTool(userId, 'records.create', params)
   }
 }
 

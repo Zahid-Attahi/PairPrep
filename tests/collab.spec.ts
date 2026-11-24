@@ -428,6 +428,89 @@ test('a non-owner cannot invite a participant to another user’s room', async (
   await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
 })
 
+test('only the owner can delete a room and active collaborators return to the dashboard', async ({ users, request }) => {
+  expect(await (await request.get('/api/integrations')).json()).toEqual({ mode: 'pairprep-local-mock' })
+  const [owner, collaborator] = await users(2)
+  const roomName = `__test-${Date.now()}__ Room deletion`
+  await owner.page.goto('/home')
+  await owner.page.getByRole('button', { name: 'Create room', exact: true }).click()
+  const create = owner.page.getByRole('dialog', { name: 'Create an interview room' })
+  await create.getByLabel('Room name').fill(roomName)
+  await create.getByRole('combobox', { name: 'Coding challenge' }).click()
+  await owner.page.getByRole('option', { name: /Two Sum/ }).click()
+  await create.getByRole('button', { name: 'Create room', exact: true }).click()
+  await expect(owner.page).toHaveURL(/\/rooms\/[^/]+$/)
+  const roomUrl = owner.page.url()
+  const roomId = new URL(roomUrl).pathname.split('/').at(-1)!
+
+  await collaborator.page.goto('/home')
+  await expect(collaborator.page.getByTestId('app-navigation')).toBeVisible()
+  await owner.page.getByLabel('Collaborator email').fill(collaborator.email)
+  await owner.page.getByRole('button', { name: 'Add collaborator', exact: true }).click()
+  await expect(owner.page.getByText(/Collaborator added/)).toBeVisible()
+  await collaborator.page.goto(roomUrl)
+  await expect(collaborator.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await expect(collaborator.page.getByRole('button', { name: 'Room options' })).toHaveCount(0)
+
+  const attemptDelete = (page: Page) => page.evaluate(async (id) => {
+    // Use the app's action client so identity is supplied by the signed-in session.
+    const { callServerAction } = await import('/src/lib/server-actions.ts')
+    return callServerAction('rooms.delete', { roomId: id }).catch((error: Error) => error.message)
+  }, roomId)
+  expect((await request.post('/api/actions/rooms.delete', { data: { roomId } })).status()).toBe(401)
+  const denied = collaborator.page.waitForResponse('**/api/actions/rooms.delete')
+  expect(await attemptDelete(collaborator.page)).toMatch(/Only the room owner/)
+  expect((await denied).status()).toBe(403)
+  await expect(owner.page.getByRole('heading', { name: roomName })).toBeVisible()
+
+  const notes = owner.page.getByRole('textbox', { name: 'Shared interview notes' })
+  await notes.fill('Shared notes to delete')
+  await expect(collaborator.page.getByRole('textbox', { name: 'Shared interview notes' })).toHaveValue('Shared notes to delete')
+  const editor = owner.page.getByRole('region', { name: 'Collaborative code editor' })
+  await expect(editor.getByRole('combobox')).toBeEnabled()
+  await editor.locator('textarea.inputarea').focus()
+  await owner.page.keyboard.insertText('const deleteMe = true')
+  await expect(collaborator.page.locator('.view-lines')).toContainText('deleteMe')
+  await owner.page.getByRole('textbox', { name: 'Message the interview coach' }).fill('How can I look up the complement?')
+  await owner.page.getByRole('button', { name: 'Send message' }).click()
+  await expect(owner.page.getByText(/Mock coach:/)).toBeVisible()
+
+  const openDelete = async () => {
+    await owner.page.getByRole('button', { name: 'Room options' }).click()
+    await owner.page.getByRole('menuitem', { name: 'Delete Room' }).click()
+  }
+  const confirm = owner.page.getByRole('dialog', { name: 'Delete Room?' })
+  await openDelete()
+  await expect(confirm).toContainText('This action cannot be undone.')
+  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  await confirm.getByRole('button', { name: 'Cancel' }).click()
+  await expect(confirm).toBeHidden()
+  await expect(collaborator.page.getByRole('heading', { name: roomName })).toBeVisible()
+
+  await openDelete()
+  const confirmDelete = confirm.getByRole('button', { name: 'Delete Room', exact: true })
+  await owner.page.route('**/api/actions/rooms.delete', (route) => route.fulfill({
+    status: 503,
+    json: { success: false, error: 'Could not delete the room. Try again.' },
+  }), { times: 1 })
+  await confirmDelete.click()
+  await expect(confirm.getByRole('alert')).toHaveText('Could not delete the room. Try again.')
+  await expect(collaborator.page.getByRole('heading', { name: roomName })).toBeVisible()
+  await confirmDelete.click()
+  await expect(owner.page).toHaveURL(/\/home$/)
+  await expect(owner.page.getByText('Room deleted.', { exact: true })).toBeVisible()
+  await expect(collaborator.page).toHaveURL(/\/home$/)
+  await expect(collaborator.page.getByText('This room is no longer available.', { exact: true })).toBeVisible()
+  for (const { page } of [owner, collaborator]) {
+    const rooms = page.getByRole('region', { name: 'Interview rooms' })
+    await expect(rooms).toBeVisible()
+    await expect(rooms.getByText(roomName, { exact: true })).toHaveCount(0)
+    await page.goto(roomUrl)
+    await expect(page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
+    await expect(page.getByRole('textbox', { name: 'Shared interview notes' })).toHaveCount(0)
+  }
+})
+
 test('two browsers exchange WebRTC media and keep coding while room access is enforced', async ({ users, request }) => {
   test.setTimeout(55_000)
   expect(await (await request.get('/api/integrations')).json()).toEqual({ mode: 'pairprep-local-mock' })
@@ -638,10 +721,28 @@ test('two browsers exchange WebRTC media and keep coding while room access is en
 
   await alice.page.getByRole('button', { name: /^Remove / }).click()
   await expect(call(alice.page).getByText('Waiting for another participant…')).toBeVisible()
-  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  await expect(bob.page).toHaveURL(/\/home$/, { timeout: 15_000 })
   expect(await bob.page.evaluate(() => (window as any).pairprepCallTest.tracks.every((track: MediaStreamTrack) => track.readyState === 'ended'))).toBe(true)
   expect(await canOpenSocket(bob.page)).toBe(false)
-  await call(alice.page).getByRole('button', { name: 'Leave Call' }).click()
+
+  await alice.page.getByLabel('Collaborator email').fill(bob.email)
+  await alice.page.getByRole('button', { name: 'Add collaborator' }).click()
+  await expect(alice.page.getByText(/Collaborator added/)).toBeVisible()
+  await bob.page.goto(roomUrl)
+  await call(bob.page).getByRole('button', { name: 'Join audio only' }).click()
+  await expect(call(alice.page).getByText('Peer-to-peer call connected.')).toBeVisible()
+  await alice.page.getByRole('button', { name: 'Room options' }).click()
+  await alice.page.getByRole('menuitem', { name: 'Delete Room' }).click()
+  await alice.page.getByRole('dialog', { name: 'Delete Room?' }).getByRole('button', { name: 'Delete Room' }).click()
+  for (const { page } of [alice, bob]) {
+    await expect(page).toHaveURL(/\/home$/)
+    await expect.poll(() => page.evaluate(() => {
+      const call = (window as any).pairprepCallTest
+      return call.sockets.at(-1).readyState === WebSocket.CLOSED &&
+        call.tracks.every((track: MediaStreamTrack) => track.readyState === 'ended')
+    })).toBe(true)
+    expect(await canOpenSocket(page)).toBe(false)
+  }
 })
 
 test('completed interview history and self-reviews survive reload and stay private', async ({ users }) => {
@@ -756,9 +857,9 @@ test('invited participants can collaborate until the owner revokes their access'
 
   await alice.page.getByRole('button', { name: /^Remove / }).click()
   await expect(alice.page.getByText('Participant removed.', { exact: true })).toBeVisible()
-  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  await expect(bob.page).toHaveURL(/\/home$/, { timeout: 15_000 })
   await expect(bobNotes).toHaveCount(0)
-  await bob.page.reload()
+  await bob.page.goto(alice.page.url())
   await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
 })
 
@@ -901,9 +1002,9 @@ test('the collaborative editor merges concurrent edits, persists language, and r
   await expect(editor(bob.page).getByRole('region', { name: 'Execution output' }).getByText('Private execution result', { exact: true })).toHaveCount(0)
 
   await alice.page.getByRole('button', { name: /^Remove / }).click()
-  await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible({ timeout: 15_000 })
+  await expect(bob.page).toHaveURL(/\/home$/, { timeout: 15_000 })
   await expect(editor(bob.page)).toHaveCount(0)
-  await bob.page.reload()
+  await bob.page.goto(alice.page.url())
   await expect(bob.page.getByRole('heading', { name: 'Room unavailable' })).toBeVisible()
   const denied = await bob.page.evaluate(async (roomId) => {
     const { callServerAction } = await import('/src/lib/server-actions.ts')

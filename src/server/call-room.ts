@@ -32,16 +32,18 @@ export class AppCallRoom {
   async fetch(request: Request): Promise<Response> {
     const { pathname } = new URL(request.url)
     if (pathname === '/generation' && request.method === 'GET') return Response.json(this.generation)
-    if (pathname === '/revoke' && request.method === 'POST') {
+    if ((pathname === '/revoke' || pathname === '/close-room') && request.method === 'POST') {
+      const closeRoom = pathname === '/close-room'
       const userId = request.headers.get('X-Call-User')
-      if (!userId) return new Response(null, { status: 400 })
+      if (!closeRoom && !userId) return new Response(null, { status: 400 })
       // The app's records object holds its concurrency barrier while calling
       // this endpoint and removing membership. In-flight joins carry the
       // generation they read before checking room access.
       this.generation += 1
       for (const [socket, peer] of this.peers()) {
-        if (peer.userId !== userId) continue
-        this.depart(socket)
+        if (!closeRoom && peer.userId !== userId) continue
+        if (closeRoom) socket.serializeAttachment(null)
+        else this.depart(socket)
         socket.close(4403, 'Room access revoked')
       }
       await this.state.storage.put('generation', this.generation)

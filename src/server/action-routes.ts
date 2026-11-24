@@ -41,6 +41,7 @@ import { actions } from '../actions/index.js'
 import { integrations } from '../integrations.js'
 import type { AppContext, Env } from '../../worker.js'
 import { codeRunBodyLimit } from './code-run.js'
+import { createRoomChildPath, roomChildScope } from './room-deletion.js'
 
 type ResolveAuth = (req: Request, env: Env) => Promise<VerifyResult | null>
 
@@ -84,6 +85,9 @@ export function registerActionRoutes(app: Hono<AppContext>, resolveAuth: Resolve
     const params = parsedParams as Record<string, unknown>
     const tools = createActionTools(c.env, auth.userId, callerJwt, name === 'rooms.members.remove' && typeof params.roomId === 'string' ? params.roomId.trim() : undefined)
     const result = await action({ userId: auth.userId, params, tools, env: c.env, callerJwt })
+    if (name === 'rooms.delete' && !result.success) {
+      return c.json(result, result.code === 'forbidden' ? 403 : result.code === 'unavailable' ? 503 : 400)
+    }
     if (codeRunAction && !result.success) {
       const status = result.code === 'forbidden' ? 403
         : result.code === 'rate_limited' ? 429
@@ -104,9 +108,12 @@ export function createActionTools(env: Env, userId: string, callerJwt: string, r
     tool: string,
     params: Record<string, unknown>,
   ): Promise<ActionResult<TData>> {
-    const path = tool === 'records.deleteWhere' && params.collection === 'team_members'
-      ? '/internal/revoke-room-member'
-      : '/api/tools/execute'
+    let path = '/api/tools/execute'
+    if (tool === 'records.create' && roomChildScope(params.collection, params.data)) {
+      path = createRoomChildPath
+    } else if (tool === 'records.deleteWhere' && params.collection === 'team_members') {
+      path = '/internal/revoke-room-member'
+    }
     const res = await stub.fetch(
       new Request(`https://internal${path}`, {
         method: 'POST',

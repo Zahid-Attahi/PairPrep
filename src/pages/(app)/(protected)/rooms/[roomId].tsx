@@ -1,9 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, useQuery, useRecordContext, useUserLookup, useYjsText } from 'deepspace'
-import { ArrowLeft, Bot, Check, ClipboardCheck, Code2, ExternalLink, FileText, MailPlus, RotateCcw, Search, Send, UserRound, UsersRound, Video } from 'lucide-react'
+import { ArrowLeft, Bot, Check, ClipboardCheck, Code2, ExternalLink, FileText, MailPlus, MoreHorizontal, RotateCcw, Search, Send, Trash2, UserRound, UsersRound, Video } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/Dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
+import { useToast } from '@/components/ui/Toast'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
@@ -276,6 +279,8 @@ export default function RoomDetailPage() {
 }
 
 function RoomDetail({ roomId }: { roomId?: string }) {
+  const navigate = useNavigate()
+  const { success, info } = useToast()
   const { userId } = useAuth()
   const { records, status, error } = useQuery<InterviewRoom>('interviewRooms')
   const { getName, usersLoaded } = useUserLookup()
@@ -289,6 +294,12 @@ function RoomDetail({ roomId }: { roomId?: string }) {
   const [removingId, setRemovingId] = useState('')
   const [removalError, setRemovalError] = useState('')
   const [removalMessage, setRemovalMessage] = useState('')
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const menuTrigger = useRef<HTMLButtonElement>(null)
+  const cancelDelete = useRef<HTMLButtonElement>(null)
+  const hasViewedRoom = useRef(false)
 
   const currentRoom = records.find((record) => record.recordId === roomId)
   const [lastRoom, setLastRoom] = useState<typeof currentRoom>()
@@ -296,6 +307,16 @@ function RoomDetail({ roomId }: { roomId?: string }) {
   // omits the room still removes the workspace immediately.
   if (status === 'ready' && currentRoom !== lastRoom) setLastRoom(currentRoom)
   const room = status === 'loading' ? lastRoom : currentRoom
+
+  useEffect(() => {
+    if (status !== 'ready') return
+    if (currentRoom) hasViewedRoom.current = true
+    else if (hasViewedRoom.current && !deleting) {
+      hasViewedRoom.current = false
+      info('This room is no longer available.')
+      void navigate('/home', { replace: true })
+    }
+  }, [currentRoom, deleting, info, navigate, status])
 
   useEffect(() => {
     if (status !== 'ready' || !room) {
@@ -362,6 +383,20 @@ function RoomDetail({ roomId }: { roomId?: string }) {
     return getName(participantId) || (participantId === ownerId ? 'Room owner' : 'Collaborator')
   }
 
+  async function deleteRoom() {
+    if (!isOwner || deleting) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      await callServerAction('rooms.delete', { roomId: roomRecordId })
+      success('Room deleted.')
+      void navigate('/home', { replace: true })
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : 'Could not delete the room. Try again.')
+      setDeleting(false)
+    }
+  }
+
   async function removeParticipant(participantId: string) {
     if (inviting || removingId) return
     setRemovingId(participantId)
@@ -416,9 +451,40 @@ function RoomDetail({ roomId }: { roomId?: string }) {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6 lg:px-8">
-      <Link to="/home" className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
-        <ArrowLeft className="size-4" aria-hidden="true" /> Back to workspace
-      </Link>
+      <div className="flex items-center justify-between gap-3">
+        <Link to="/home" className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+          <ArrowLeft className="size-4" aria-hidden="true" /> Back to workspace
+        </Link>
+        {isOwner && (
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger ref={menuTrigger} render={<Button size="icon" variant="outline" aria-label="Room options" />}>
+                <MoreHorizontal aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onClick={() => { setDeleteError(''); setDeleteOpen(true) }}>
+                  <Trash2 aria-hidden="true" /> Delete Room
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Dialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) setDeleteOpen(open) }}>
+              <DialogContent hideClose initialFocus={cancelDelete} finalFocus={menuTrigger}>
+                <DialogHeader>
+                  <DialogTitle>Delete Room?</DialogTitle>
+                  <DialogDescription className="break-words">
+                    Permanently delete “{name}” and its shared notes, code, AI conversations, and reviews. Everyone will lose access. This action cannot be undone.
+                  </DialogDescription>
+                </DialogHeader>
+                {deleteError && <p role="alert" className="text-sm text-destructive">{deleteError}</p>}
+                <DialogFooter>
+                  <DialogClose render={<Button ref={cancelDelete} variant="outline" disabled={deleting} />}>Cancel</DialogClose>
+                  <Button variant="destructive" loading={deleting} onClick={() => void deleteRoom()}>Delete Room</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+      </div>
 
       <header className="mt-4 grid items-center gap-4 rounded-2xl border border-border bg-card p-4 sm:p-6 md:grid-cols-[minmax(0,1fr)_minmax(15rem,0.65fr)]">
         <div className="min-w-0">
