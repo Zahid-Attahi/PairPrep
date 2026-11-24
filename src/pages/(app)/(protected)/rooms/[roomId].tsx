@@ -454,7 +454,7 @@ function RoomDetail({ roomId }: { roomId?: string }) {
         ))}
       </nav>
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_19rem] lg:gap-5">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_19rem] lg:gap-5 lg:has-[[data-layout=expanded]]:grid-cols-[minmax(0,1fr)_minmax(28rem,52%)]">
         <Suspense fallback={<section id="coding" role="status" className="grid min-h-80 place-items-center rounded-2xl border border-border bg-card text-sm text-muted-foreground">Loading code editor…</section>}>
           <RoomCodeEditor roomId={roomRecordId} />
         </Suspense>

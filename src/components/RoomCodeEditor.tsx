@@ -181,10 +181,15 @@ export default function RoomCodeEditor({ roomId }: { roomId: string }) {
               {Object.entries(codeLanguages).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select>
           </label>
-          <Button loading={running} disabled={!ready || !runnerAvailable} onClick={() => void runCode()} aria-describedby="execution-status">
+          <Button loading={running} disabled={!ready || !runnerAvailable} onClick={() => void runCode()} aria-describedby={runnerAvailable ? 'execution-status' : 'java-execution-help'}>
             <Play aria-hidden="true" />{running ? 'Running…' : 'Run Code'}
           </Button>
         </div>
+        {!runnerAvailable && (
+          <p id="java-execution-help" role="status" className="w-full text-xs text-muted-foreground">
+            Java execution is not supported yet. You can still edit Java code.
+          </p>
+        )}
       </div>
       <div className="relative border-t border-border" aria-busy={!ready}>
         <div ref={editorHost} className="pairprep-code-editor h-[clamp(20rem,50vh,34rem)]" data-language={language} />
@@ -203,7 +208,7 @@ export default function RoomCodeEditor({ roomId }: { roomId: string }) {
               {running ? 'Running in the sandbox…'
                 : result ? codeRunMessages[result.status]
                   : runnerAvailable ? 'Runs locally in this browser.'
-                    : 'Java is available for editing. Browser execution supports Python and JavaScript.'}
+                    : 'Select Python or JavaScript to run code.'}
               {result?.durationMs != null && <span> · {result.durationMs.toLocaleString()} ms</span>}
             </p>
           </div>

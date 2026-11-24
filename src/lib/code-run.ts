@@ -1,4 +1,4 @@
-export const codeLanguages = { javascript: 'JavaScript', python: 'Python', java: 'Java' } as const
+export const codeLanguages = { javascript: 'JavaScript', python: 'Python', java: 'Java (Editor Only)' } as const
 export type CodeLanguage = keyof typeof codeLanguages
 
 export function isCodeLanguage(value: unknown): value is CodeLanguage {
